@@ -1,30 +1,69 @@
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { logger } from "../../utils/logger.js";
+
+const isServerless =
+  !!process.env.VERCEL ||
+  !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  !!process.env.AWS_EXECUTION_ENV ||
+  !!process.env.NETLIFY;
 
 let browser: Browser | null = null;
 let launching: Promise<Browser> | null = null;
 
-async function launch(): Promise<Browser> {
-  logger.info("[browser] launching chromium");
+async function launchLocal(): Promise<Browser> {
+  // Dev: usar el chromium que trae playwright (devDependency)
+  const execPath = process.env.CHROME_PATH;
+  if (execPath) {
+    return chromium.launch({ headless: true, executablePath: execPath });
+  }
+  // Sin CHROME_PATH: dejar que playwright-core encuentre uno bundled vía playwright (devDep)
+  // Para que esto funcione localmente: `pnpm playwright:install` antes de `pnpm dev`.
+  return chromium.launch({ headless: true });
+}
+
+async function launchServerless(): Promise<Browser> {
+  // Lambda/Vercel: usar @sparticuz/chromium (binario tipo "lite" optimizado para serverless)
+  const sparticuz = (await import("@sparticuz/chromium")).default as unknown as {
+    args: string[];
+    executablePath: () => Promise<string>;
+    setHeadlessMode?: (v: boolean) => void;
+  };
+  if (typeof sparticuz.setHeadlessMode === "function") {
+    sparticuz.setHeadlessMode(true);
+  }
   return chromium.launch({
+    args: [
+      ...sparticuz.args,
+      "--disable-dev-shm-usage",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--single-process",
+    ],
+    executablePath: await sparticuz.executablePath(),
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   });
+}
+
+async function launch(): Promise<Browser> {
+  logger.info("[browser] launching", { mode: isServerless ? "serverless" : "local" });
+  return isServerless ? launchServerless() : launchLocal();
 }
 
 export async function getBrowser(): Promise<Browser> {
   if (browser && browser.isConnected()) return browser;
   if (launching) return launching;
-  launching = launch().then((b) => {
-    browser = b;
-    b.on("disconnected", () => {
-      logger.warn("[browser] disconnected");
-      browser = null;
+  launching = launch()
+    .then((b) => {
+      browser = b;
+      b.on("disconnected", () => {
+        logger.warn("[browser] disconnected");
+        browser = null;
+      });
+      return b;
+    })
+    .finally(() => {
+      launching = null;
     });
-    return b;
-  }).finally(() => {
-    launching = null;
-  });
   return launching;
 }
 
@@ -39,6 +78,10 @@ export async function withContext<T>(fn: (ctx: BrowserContext) => Promise<T>): P
     return await fn(ctx);
   } finally {
     await ctx.close().catch(() => {});
+    if (isServerless) {
+      // Cerrar browser al final de cada invocación serverless: la lambda muere igual.
+      await closeBrowser();
+    }
   }
 }
 
