@@ -375,65 +375,117 @@ async function extraerDatosWr(page: Page): Promise<DatosWr> {
   // shipper / carrier / tracking → 2 estrategias:
   //   A) Mismo TD: <td><b>Shipper</b><br>AMAZON</td> → innerText split por líneas
   //   B) TDs adyacentes: <td>Shipper</td><td>AMAZON</td>
-  const labeled = await page
-    .evaluate(
-      ({ shipperLabels, carrierLabels, trackingLabels }) => {
-        const norm = (s: string) =>
-          (s || "")
-            .toLowerCase()
-            .replace(/[:：#]+\s*$/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
+  // Extraer datos crudos de la página para procesarlos en Node (evita errores de __name en evaluate)
+  const { bodyText, allCells, tablesData } = await page.evaluate(() => {
+    const tds = Array.from(document.querySelectorAll("td, th")) as HTMLElement[];
+    const allCells = tds.map(td => (td.innerText || td.textContent || "").trim());
+    
+    const tablesData = Array.from(document.querySelectorAll("table")).map(table => {
+      return Array.from(table.querySelectorAll("tr")).map(tr => {
+        return Array.from(tr.querySelectorAll("td, th")).map(td => {
+          const txt = ((td as HTMLElement).innerText || td.textContent || "").trim();
+          return txt;
+        });
+      });
+    });
 
-        const tds = Array.from(document.querySelectorAll("td")) as HTMLTableCellElement[];
+    return {
+      bodyText: document.body.innerText || "",
+      allCells,
+      tablesData,
+    };
+  }).catch(() => ({ bodyText: "", allCells: [], tablesData: [] }));
 
-        // Estrategia A: label y value en el MISMO td (stacked con <br>)
-        const findSameCell = (labels: string[]): string | null => {
-          for (const td of tds) {
-            const text = ((td as HTMLElement).innerText || td.textContent || "").trim();
-            if (!text) continue;
-            const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-            if (lines.length < 2) continue;
-            const labelLine = norm(lines[0] ?? "");
-            if (!labels.includes(labelLine)) continue;
-            const val = lines.slice(1).join(" ").trim();
-            if (val && val.length < 400) return val;
-          }
-          return null;
-        };
+  const norm = (s: string) => (s || "").toLowerCase().replace(/[:：#]+\s*$/g, "").replace(/\s+/g, " ").trim();
+  const firstLine = (s: string) => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0] || s;
 
-        // Estrategia B: label y value en TDs adyacentes
-        const findAdjacent = (labels: string[]): string | null => {
-          for (let i = 0; i < tds.length; i++) {
-            const cur = tds[i];
-            const next = tds[i + 1];
-            if (!cur || !next) continue;
-            const label = norm(cur.textContent || "");
-            if (!label) continue;
-            if (labels.includes(label)) {
-              const val = (next.textContent || "").trim();
-              if (val && val.length > 0 && val.length < 200) return val;
-            }
-          }
-          return null;
-        };
-
-        const findByLabels = (labels: string[]): string | null =>
-          findSameCell(labels) ?? findAdjacent(labels);
-
-        return {
-          shipper: findByLabels(shipperLabels),
-          carrier: findByLabels(carrierLabels),
-          trackingOriginal: findByLabels(trackingLabels),
-        };
-      },
-      {
-        shipperLabels: LABEL_CANDIDATES_SHIPPER,
-        carrierLabels: LABEL_CANDIDATES_CARRIER,
-        trackingLabels: LABEL_CANDIDATES_TRACKING,
+  function findSameCell(labels: string[]): string | null {
+    const inlineRegexes = labels.map(l => new RegExp(`^${l}[:#]?\\s+(.+)$`, 'is'));
+    for (const text of allCells) {
+      if (!text) continue;
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length >= 2) {
+        const labelLine = norm(lines[0] ?? "");
+        if (labels.includes(labelLine)) {
+          const val = firstLine(lines.slice(1).join("\n"));
+          if (val && val.length < 200) return val;
+        }
       }
-    )
-    .catch(() => ({ shipper: null, carrier: null, trackingOriginal: null }));
+      const normText = text.replace(/\s+/g, " ").trim();
+      for (const r of inlineRegexes) {
+        const match = normText.match(r);
+        if (match && match[1]) {
+           return firstLine(match[1].trim());
+        }
+      }
+    }
+    return null;
+  }
+
+  function findAdjacent(labels: string[]): string | null {
+    for (let i = 0; i < allCells.length - 1; i++) {
+      const cell = allCells[i];
+      if (cell === undefined) continue;
+      const label = norm(cell);
+      if (labels.includes(label)) {
+        const val = firstLine(allCells[i+1] || "");
+        if (val && val.length > 0 && val.length < 200) return val;
+      }
+    }
+    return null;
+  }
+
+  function findBelow(labels: string[]): string | null {
+    for (const table of tablesData) {
+      for (let r = 0; r < table.length - 1; r++) {
+        const currentRow = table[r];
+        const nextRow = table[r+1];
+        if (!currentRow || !nextRow) continue;
+        for (let c = 0; c < currentRow.length; c++) {
+          const cell = currentRow[c];
+          if (cell === undefined) continue;
+          const label = norm(cell);
+          if (labels.includes(label)) {
+             const val = firstLine(nextRow[c] || "");
+             if (val && val.length > 0 && val.length < 200) return val;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function findInBody(labels: string[]): string | null {
+    const lines = bodyText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length - 1; i++) {
+      const label = norm(lines[i] || "");
+      if (labels.includes(label)) {
+        const val = lines[i+1];
+        if (val && val.length > 0 && val.length < 200) return val;
+      }
+    }
+    return null;
+  }
+
+  const findByLabels = (labels: string[]): string | null => {
+    let result = findSameCell(labels) ?? findAdjacent(labels) ?? findBelow(labels);
+    if (result) return result;
+    return findInBody(labels);
+  };
+
+  const shipperLabels = [...LABEL_CANDIDATES_SHIPPER, "shipper name", "shipper / sender", "vendor"];
+  const carrierLabels = [...LABEL_CANDIDATES_CARRIER, "carrier name", "delivered by"];
+  const trackingLabels = [...LABEL_CANDIDATES_TRACKING, "trk #", "trk"];
+
+  const labeled = {
+    shipper: findByLabels(shipperLabels),
+    carrier: findByLabels(carrierLabels),
+    trackingOriginal: findByLabels(trackingLabels),
+  };
+
+  if (!labeled.shipper) {
+    logger.warn("[scraper] Shipper no encontrado. Volcado de texto de la pagina:", { text: bodyText.substring(0, 2000) });
+  }
 
   // Fallback: si `notes` parece un tracking number típico (UPS 1Z..., FedEx, USPS, números largos)
   // y `trackingOriginal` no se encontró por etiqueta, intentar extraerlo del notes.
