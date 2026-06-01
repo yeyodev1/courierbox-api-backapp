@@ -31,6 +31,9 @@ export interface TrackingResult {
   descripcion: string | null;
   notes: string | null;        // p.ej. nombre del consignatario
   consignee: string | null;
+  trackingOriginal?: string | null;  // número de tracking original (UPS/FedEx/Amazon)
+  shipper?: string | null;            // remitente (Amazon, eBay, etc.)
+  carrier?: string | null;            // transportista (UPS, FedEx, USPS, etc.)
   pesoLb: number | null;
   costo: TrackingCosto | null;
   fechaRecepcion: string | null;   // ISO o texto crudo

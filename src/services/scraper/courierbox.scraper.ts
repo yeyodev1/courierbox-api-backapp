@@ -59,8 +59,8 @@ function parseFecha(raw: string | null | undefined): string | null {
     /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?\s*m\.?)?)?/i
   );
   if (m && m[1] && m[2] && m[3]) {
-    const d = m[1];
-    const mo = m[2];
+    const mo = m[1];
+    const d = m[2];
     const y = m[3].length === 2 ? `20${m[3]}` : m[3];
     let hh = m[4] ? Number(m[4]) : 0;
     const mm = m[5] ? Number(m[5]) : 0;
@@ -177,7 +177,15 @@ export async function obtenerEstadoGuia(codigoRaw: string): Promise<TrackingResu
       // ── PASO 5: página WR (notes, descripción, peso, imágenes) ────
       const datosWr = wrHref
         ? await abrirYExtraer(ctx, absUrl(wrHref), extraerDatosWr)
-        : { notes: null, description: null, pesoLb: null, imagenes: [] };
+        : {
+            notes: null,
+            description: null,
+            pesoLb: null,
+            imagenes: [],
+            shipper: null,
+            carrier: null,
+            trackingOriginal: null,
+          };
 
       // ── PASO 6: página SH (status, fecha, consignee) ──────────────
       const datosSh = shHref
@@ -197,6 +205,9 @@ export async function obtenerEstadoGuia(codigoRaw: string): Promise<TrackingResu
         descripcion: datosWr.description ?? cabeceraDatos.descripcion ?? null,
         notes: datosWr.notes ?? null,
         consignee: datosSh.consignee ?? null,
+        trackingOriginal: datosWr.trackingOriginal ?? null,
+        shipper: datosWr.shipper ?? null,
+        carrier: datosWr.carrier ?? null,
         pesoLb,
         costo: calcularCosto(pesoLb),
         fechaRecepcion: cabeceraDatos.fechaRecepcionISO ?? cabeceraDatos.fechaRecepcionRaw ?? null,
@@ -285,7 +296,22 @@ interface DatosWr {
   description: string | null;
   pesoLb: number | null;
   imagenes: string[];
+  shipper: string | null;
+  carrier: string | null;
+  trackingOriginal: string | null;
 }
+
+// Etiquetas candidatas para cada campo (case-insensitive, sin ":")
+const LABEL_CANDIDATES_SHIPPER = [
+  "shipper", "remitente", "sender", "from", "de",
+];
+const LABEL_CANDIDATES_CARRIER = [
+  "carrier", "transportista", "courier", "shipped via", "via", "transporte",
+];
+const LABEL_CANDIDATES_TRACKING = [
+  "tracking", "tracking #", "tracking number", "tracking no", "n. tracking",
+  "guia", "guía", "guia courier", "tracking original", "número de tracking",
+];
 
 async function extraerDatosWr(page: Page): Promise<DatosWr> {
   // notes
@@ -346,7 +372,86 @@ async function extraerDatosWr(page: Page): Promise<DatosWr> {
   const imagenesAbs = imagenes.map((s) => (s.startsWith("http") ? s : `${"__BASE__"}/${s.replace(/^\/+/, "")}`))
     .map((s) => s.replace("__BASE__", SISTEMA_BASE));
 
-  return { notes, description, pesoLb, imagenes: imagenesAbs };
+  // shipper / carrier / tracking → 2 estrategias:
+  //   A) Mismo TD: <td><b>Shipper</b><br>AMAZON</td> → innerText split por líneas
+  //   B) TDs adyacentes: <td>Shipper</td><td>AMAZON</td>
+  const labeled = await page
+    .evaluate(
+      ({ shipperLabels, carrierLabels, trackingLabels }) => {
+        const norm = (s: string) =>
+          (s || "")
+            .toLowerCase()
+            .replace(/[:：#]+\s*$/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const tds = Array.from(document.querySelectorAll("td")) as HTMLTableCellElement[];
+
+        // Estrategia A: label y value en el MISMO td (stacked con <br>)
+        const findSameCell = (labels: string[]): string | null => {
+          for (const td of tds) {
+            const text = ((td as HTMLElement).innerText || td.textContent || "").trim();
+            if (!text) continue;
+            const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+            if (lines.length < 2) continue;
+            const labelLine = norm(lines[0] ?? "");
+            if (!labels.includes(labelLine)) continue;
+            const val = lines.slice(1).join(" ").trim();
+            if (val && val.length < 400) return val;
+          }
+          return null;
+        };
+
+        // Estrategia B: label y value en TDs adyacentes
+        const findAdjacent = (labels: string[]): string | null => {
+          for (let i = 0; i < tds.length; i++) {
+            const cur = tds[i];
+            const next = tds[i + 1];
+            if (!cur || !next) continue;
+            const label = norm(cur.textContent || "");
+            if (!label) continue;
+            if (labels.includes(label)) {
+              const val = (next.textContent || "").trim();
+              if (val && val.length > 0 && val.length < 200) return val;
+            }
+          }
+          return null;
+        };
+
+        const findByLabels = (labels: string[]): string | null =>
+          findSameCell(labels) ?? findAdjacent(labels);
+
+        return {
+          shipper: findByLabels(shipperLabels),
+          carrier: findByLabels(carrierLabels),
+          trackingOriginal: findByLabels(trackingLabels),
+        };
+      },
+      {
+        shipperLabels: LABEL_CANDIDATES_SHIPPER,
+        carrierLabels: LABEL_CANDIDATES_CARRIER,
+        trackingLabels: LABEL_CANDIDATES_TRACKING,
+      }
+    )
+    .catch(() => ({ shipper: null, carrier: null, trackingOriginal: null }));
+
+  // Fallback: si `notes` parece un tracking number típico (UPS 1Z..., FedEx, USPS, números largos)
+  // y `trackingOriginal` no se encontró por etiqueta, intentar extraerlo del notes.
+  let trackingOriginal = labeled.trackingOriginal;
+  if (!trackingOriginal && notes) {
+    const m = notes.match(/\b(1Z[0-9A-Z]{16}|[0-9]{12,30}|[A-Z]{2}[0-9]{9}[A-Z]{2})\b/i);
+    if (m && m[1]) trackingOriginal = m[1];
+  }
+
+  return {
+    notes,
+    description,
+    pesoLb,
+    imagenes: imagenesAbs,
+    shipper: labeled.shipper,
+    carrier: labeled.carrier,
+    trackingOriginal,
+  };
 }
 
 interface DatosSh {
