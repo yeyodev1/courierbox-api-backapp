@@ -3,7 +3,10 @@ import { z } from "zod";
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(8100),
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z.preprocess(
+    (val) => (typeof val === "string" ? val.trim() : val),
+    z.enum(["development", "production", "test"])
+  ).default("development"),
   FRONTEND_ORIGIN: z
     .string()
     .default("http://localhost:5173")
@@ -21,7 +24,7 @@ const schema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
 
-  MONGO_URI: z.string().url("MONGO_URI must be a valid URL"),
+  DB_URI: z.string().url("DB_URI must be a valid URL"),
   JWT_SECRET: z.string().min(10, "JWT_SECRET is required"),
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(1),

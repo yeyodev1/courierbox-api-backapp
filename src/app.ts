@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import http from "http";
 
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error.js";
@@ -11,7 +12,7 @@ import { authRouter } from "./routes/auth.routes.js";
 import { paymentRouter } from "./routes/payment.routes.js";
 import userRouter from "./routes/user.routes.js";
 
-export function buildApp() {
+export function createApp() {
   const app = express();
 
   app.set("trust proxy", 1);
@@ -61,7 +62,7 @@ export function buildApp() {
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);
 
-  return app;
-}
+  const server = http.createServer(app);
 
-export default buildApp();
+  return { app, server };
+}

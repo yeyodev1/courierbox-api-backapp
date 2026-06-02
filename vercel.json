@@ -1,11 +1,21 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/index.ts": {
-      "maxDuration": 60
+  "version": 2,
+  "builds": [
+    {
+      "src": "src/index.ts",
+      "use": "@vercel/node"
     }
-  },
+  ],
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api" }
+    {
+      "source": "/(.*)",
+      "destination": "src/index.ts"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/payment-reminders",
+      "schedule": "*/5 * * * *"
+    }
   ]
 }

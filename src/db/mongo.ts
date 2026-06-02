@@ -1,13 +1,17 @@
 import mongoose from "mongoose";
-import { logger } from "../utils/logger.js";
 
-export async function connectMongo(uri: string): Promise<void> {
+export async function dbConnect() {
+  const DB_URI = process.env.DB_URI;
+
+  if (!DB_URI) {
+    throw new Error("DB_URI is not defined in environment variables");
+  }
+
   try {
-    mongoose.set("strictQuery", true);
-    await mongoose.connect(uri);
-    logger.info("[mongo] connected successfully");
+    await mongoose.connect(DB_URI);
+    console.log("Connected to MongoDB");
   } catch (error) {
-    logger.error("[mongo] connection error:", { error: String(error) });
-    throw error;
+    console.error("MongoDB connection error:", error);
+    process.exit(1);
   }
 }
