@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { generatePaymentLink, getPayments } from "../controllers/payment.controller.js";
+import { generatePaymentLink, getPayments, deletePaymentLink } from "../controllers/payment.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 
 export const paymentRouter = Router();
@@ -9,3 +9,4 @@ paymentRouter.use(requireAuth);
 
 paymentRouter.post("/generate", generatePaymentLink);
 paymentRouter.get("/", getPayments);
+paymentRouter.delete("/:id", deletePaymentLink);

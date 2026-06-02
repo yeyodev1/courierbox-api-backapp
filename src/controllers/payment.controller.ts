@@ -69,3 +69,28 @@ export async function getPayments(req: Request, res: Response, next: NextFunctio
     next(error);
   }
 }
+
+export async function deletePaymentLink(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+
+    const payment = await models.payments.findById(id);
+
+    if (!payment) {
+      res.status(404).json({ error: "Payment link not found" });
+      return;
+    }
+
+    if (payment.status === "paid" || payment.status === "approved") {
+      res.status(400).json({ error: "Cannot delete a paid payment link" });
+      return;
+    }
+
+    await models.payments.findByIdAndDelete(id);
+
+    res.status(200).json({ message: "Payment link deleted successfully" });
+  } catch (error) {
+    console.error("[payment.controller] deletePaymentLink error:", error);
+    next(error);
+  }
+}
