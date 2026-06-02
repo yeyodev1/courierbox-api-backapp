@@ -21,7 +21,12 @@ const schema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
 
-  MONGO_URI: z.string().optional(),
+  MONGO_URI: z.string().url("MONGO_URI must be a valid URL"),
+  JWT_SECRET: z.string().min(10, "JWT_SECRET is required"),
+  ADMIN_EMAIL: z.string().email(),
+  ADMIN_PASSWORD: z.string().min(1),
+  PAYPHONE_STORE_ID: z.string().min(1),
+  PAYPHONE_TOKEN: z.string().min(1),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -7,7 +7,9 @@ import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { trackingRouter } from "./routes/tracking.routes.js";
-// import { connectMongo } from "./db/mongo.js"; // disabled — sin DB por ahora
+import { authRouter } from "./routes/auth.routes.js";
+import { paymentRouter } from "./routes/payment.routes.js";
+import userRouter from "./routes/user.routes.js";
 
 export function buildApp() {
   const app = express();
@@ -52,6 +54,9 @@ export function buildApp() {
 
   app.use("/health", healthRouter);
   app.use("/api/tracking", trackingRouter);
+  app.use("/api/auth", authRouter);
+  app.use("/api/payments", paymentRouter);
+  app.use("/api/users", userRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);
