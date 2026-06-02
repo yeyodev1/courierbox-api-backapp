@@ -13,6 +13,7 @@ export interface IPayment extends Document {
   status: "pending" | "paid" | "canceled";
   customerEmail?: string;
   customerName?: string;
+  createdBy?: mongoose.Types.ObjectId | any;
 }
 
 const paymentSchema = new Schema<IPayment>(
@@ -29,6 +30,7 @@ const paymentSchema = new Schema<IPayment>(
     status: { type: String, enum: ["pending", "paid", "canceled"], default: "pending" },
     customerEmail: { type: String },
     customerName: { type: String },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   {
     timestamps: true,

@@ -46,6 +46,7 @@ export async function generatePaymentLink(req: Request, res: Response, next: Nex
       customerName,
       currency: "USD",
       expiresAt,
+      createdBy: req.user?.userId,
     });
 
     res.status(201).json({
@@ -61,7 +62,7 @@ export async function generatePaymentLink(req: Request, res: Response, next: Nex
 
 export async function getPayments(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const payments = await models.payments.find().sort({ createdAt: -1 }).limit(50);
+    const payments = await models.payments.find().populate("createdBy", "name email").sort({ createdAt: -1 }).limit(50);
     res.status(200).json({ payments });
   } catch (error) {
     console.error("[payment.controller] getPayments error:", error);
