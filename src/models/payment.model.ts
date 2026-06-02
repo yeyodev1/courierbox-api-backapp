@@ -10,7 +10,8 @@ export interface IPayment extends Document {
   clientTransactionId: string;
   storeId: string;
   paymentLink: string;
-  status: "pending" | "paid" | "canceled";
+  status: "pending" | "paid" | "approved" | "canceled";
+  expiresAt?: Date;
   customerEmail?: string;
   customerName?: string;
   createdBy?: mongoose.Types.ObjectId | any;
@@ -27,7 +28,8 @@ const paymentSchema = new Schema<IPayment>(
     clientTransactionId: { type: String, required: true, unique: true },
     storeId: { type: String, required: true },
     paymentLink: { type: String, required: true },
-    status: { type: String, enum: ["pending", "paid", "canceled"], default: "pending" },
+    status: { type: String, enum: ["pending", "paid", "approved", "canceled"], default: "pending" },
+    expiresAt: { type: Date },
     customerEmail: { type: String },
     customerName: { type: String },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
