@@ -3,7 +3,9 @@ import { ZodError } from "zod";
 import { ScraperError } from "../services/scraper/courierbox.scraper.js";
 import { logger } from "../utils/logger.js";
 
-export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
+  const isDev = process.env.NODE_ENV !== "production";
+
   if (err instanceof ZodError) {
     return res.status(400).json({ error: "invalid_input", details: err.flatten() });
   }
@@ -17,6 +19,14 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     const status = map[err.kind] ?? 500;
     return res.status(status).json({ error: err.kind, message: err.message });
   }
-  logger.error("[error] unhandled", { err: err instanceof Error ? err.stack : String(err) });
-  res.status(500).json({ error: "internal_error" });
+
+  const errorMessage = err instanceof Error ? err.message : String(err);
+
+  if (isDev) {
+    logger.error("[error] unhandled", { err: err instanceof Error ? err.stack : String(err) });
+    return res.status(500).json({ error: "internal_error", message: errorMessage, stack: err instanceof Error ? err.stack : undefined });
+  }
+
+  logger.error("[error] unhandled", { err: errorMessage, path: req.path });
+  res.status(500).json({ error: "internal_error", message: errorMessage });
 };
