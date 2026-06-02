@@ -31,14 +31,20 @@ export class PayphoneService {
       const response = await fetch(this.apiUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${env.PAYPHONE_TOKEN}`,
+          Authorization: `Bearer ${env.PAYPHONE_TOKEN.trim()}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(data),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (e) {
+          errorData = errorText; // fallback to text if not json
+        }
         logger.error("[payphone.service] API Error", errorData);
         throw new Error(`Payphone API Error: ${response.status} ${response.statusText}`);
       }
