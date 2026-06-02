@@ -1,8 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { models } from "../models/index.js";
-import { payphoneService } from "../services/payphone.service.js";
-import { env } from "../config/env.js";
+import { payphoneLinksService } from "../services/payphone.service.js";
+import 'dotenv/config';
 
 export async function generatePaymentLink(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -23,15 +23,13 @@ export async function generatePaymentLink(req: Request, res: Response, next: Nex
 
     const clientTransactionId = crypto.randomBytes(7).toString("hex");
 
-    const paymentLink = await payphoneService.generateLink({
-      amount,
-      amountWithoutTax,
-      amountWithTax,
-      tax,
+    const { paymentLink, expiresAt } = await payphoneLinksService.createPaymentLink({
+      amountCents: amount,
+      amountWithoutTaxCents: amountWithoutTax,
+      taxCents: tax,
       reference,
       clientTransactionId,
-      currency: "USD",
-      expireIn: 24,
+      expireInHours: 24,
     });
 
     const newPayment = await models.payments.create({
@@ -41,12 +39,13 @@ export async function generatePaymentLink(req: Request, res: Response, next: Nex
       tax,
       reference,
       clientTransactionId,
-      storeId: env.PAYPHONE_STORE_ID,
       paymentLink,
+      storeId: process.env.PAYPHONE_STORE_ID,
       status: "pending",
       customerEmail,
       customerName,
-      currency: "USD"
+      currency: "USD",
+      expiresAt,
     });
 
     res.status(201).json({
@@ -54,8 +53,9 @@ export async function generatePaymentLink(req: Request, res: Response, next: Nex
       payment: newPayment,
     });
   } catch (error) {
-    console.error("[payment.controller] generateLink error:", error);
-    next(error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[payment.controller] generateLink error:", message);
+    res.status(500).json({ error: "internal_error", detail: message });
   }
 }
 
