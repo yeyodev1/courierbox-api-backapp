@@ -11,6 +11,7 @@ import { trackingRouter } from "./routes/tracking.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { paymentRouter } from "./routes/payment.routes.js";
 import userRouter from "./routes/user.routes.js";
+import { adminRouter } from "./routes/admin.routes.js";
 
 export function createApp() {
   const app = express();
@@ -58,6 +59,7 @@ export function createApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/payments", paymentRouter);
   app.use("/api/users", userRouter);
+  app.use("/api/admin", adminRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);

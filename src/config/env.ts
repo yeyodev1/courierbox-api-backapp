@@ -30,6 +30,7 @@ const schema = z.object({
   ADMIN_PASSWORD: z.string().min(1),
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),
+  GHL_ACCESS_TOKEN: z.string().min(1, "GHL_ACCESS_TOKEN is required"),
 });
 
 const parsed = schema.safeParse(process.env);
