@@ -31,6 +31,20 @@ const schema = z.object({
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),
   GHL_ACCESS_TOKEN: z.string().min(1, "GHL_ACCESS_TOKEN is required"),
+
+  // --- CourierBridge Hub ---
+  GHL_WEBHOOK_INVOICE_URL: z.string().default(""),
+  CONTIFICO_API_URL: z.string().default("https://api.contifico.com/v1"),
+  CONTIFICO_API_KEY: z.string().default(""),
+  CONTIFICO_TOKEN: z.string().default(""),
+  CONTIFICO_PUNTO_EMISION: z.string().default("001"),
+  CONTIFICO_ESTABLECIMIENTO: z.string().default("001"),
+  STORAGE_BASE_URL: z.string().default("/uploads"),
+
+  // --- Cloudinary ---
+  CLOUDINARY_CLOUD_NAME: z.string().default(""),
+  CLOUDINARY_API_KEY: z.string().default(""),
+  CLOUDINARY_API_SECRET: z.string().default(""),
 });
 
 const parsed = schema.safeParse(process.env);
