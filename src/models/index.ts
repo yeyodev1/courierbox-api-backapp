@@ -8,6 +8,7 @@ import { FeeConfig } from "./fee_config.model.js";
 import { PurchaseOrder } from "./purchase_order.model.js";
 import { Gasto } from "./gasto.model.js";
 import { EnvioDomicilio } from "./envio_domicilio.model.js";
+import { Proveedor } from "./proveedor.model.js";
 
 export const models = {
   payments: Payment,
@@ -20,4 +21,5 @@ export const models = {
   purchaseOrders: PurchaseOrder,
   gastos: Gasto,
   enviosDomicilio: EnvioDomicilio,
+  proveedores: Proveedor,
 };

@@ -18,6 +18,8 @@ import { conciliacionRouter } from "./routes/conciliacion.routes.js";
 import { asesoriaRouter } from "./routes/asesoria.routes.js";
 import costosRouter from "./routes/costos.routes.js";
 import enviosRouter from "./routes/envios.routes.js";
+import { contactosRouter } from "./routes/contactos.routes.js";
+import { proveedoresRouter } from "./routes/proveedores.routes.js";
 
 export function createApp() {
   const app = express();
@@ -72,6 +74,8 @@ export function createApp() {
   app.use("/api/v1/asesoria", asesoriaRouter);
   app.use("/api/v1/costos", costosRouter);
   app.use("/api/v1/envios", enviosRouter);
+  app.use("/api/v1/contactos", contactosRouter);
+  app.use("/api/v1/proveedores", proveedoresRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);

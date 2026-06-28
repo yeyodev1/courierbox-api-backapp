@@ -59,17 +59,7 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const {
-      paqueteId,
-      clienteNombre,
-      clienteDireccion,
-      clienteTelefono,
-      tipoTransportista,
-      transportistaNombre,
-      costoEnvio,
-      trackingLocal,
-      notas,
-    } = req.body;
+    const { paqueteId, clienteNombre, clienteDireccion, clienteTelefono, trayectoUsa, trayectoLocal, notas } = req.body;
 
     if (!paqueteId || !clienteNombre || !clienteDireccion) {
       res.status(400).json({ error: "paqueteId, clienteNombre, clienteDireccion are required" });
@@ -81,10 +71,18 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       clienteNombre,
       clienteDireccion,
       clienteTelefono: clienteTelefono || "",
-      tipoTransportista: tipoTransportista || "externo",
-      transportistaNombre: transportistaNombre || "",
-      costoEnvio: costoEnvio || 0,
-      trackingLocal: trackingLocal || "",
+      trayectoUsa: {
+        proveedorNombre: trayectoUsa?.proveedorNombre || "",
+        tracking: trayectoUsa?.tracking || "",
+        costo: trayectoUsa?.costo || 0,
+        notas: trayectoUsa?.notas || "",
+      },
+      trayectoLocal: {
+        proveedorNombre: trayectoLocal?.proveedorNombre || "",
+        tracking: trayectoLocal?.tracking || "",
+        costo: trayectoLocal?.costo || 0,
+        notas: trayectoLocal?.notas || "",
+      },
       notas: notas || "",
       creadoPor: user.userId,
     });
@@ -129,6 +127,49 @@ export async function deleteEnvio(req: Request, res: Response, next: NextFunctio
   }
 }
 
+export async function buscarClientes(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { q } = req.query;
+    if (!q || String(q).length < 2) {
+      res.status(200).json({ clientes: [] });
+      return;
+    }
+
+    const regex = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const orders = await models.purchaseOrders
+      .find({
+        $or: [
+          { clientName: regex },
+          { clientEmail: regex },
+          { clientPhone: regex },
+        ],
+      })
+      .select("clientName clientEmail clientPhone createdAt")
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    // Deduplicate by name+email+phone
+    const seen = new Set<string>();
+    const clientes: any[] = [];
+    for (const o of orders) {
+      const key = `${o.clientName}|${o.clientEmail || ""}|${o.clientPhone || ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clientes.push({
+        clientName: o.clientName,
+        clientEmail: o.clientEmail,
+        clientPhone: o.clientPhone,
+        lastOrderDate: o.createdAt,
+      });
+    }
+
+    res.status(200).json({ clientes });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function buscarPaquetes(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { q } = req.query;
@@ -151,6 +192,33 @@ export async function buscarPaquetes(req: Request, res: Response, next: NextFunc
       .lean();
 
     res.status(200).json({ paquetes });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function marcarPagoEnvio(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { trayecto, pagado, fechaPago, comprobanteUrl } = req.body;
+    if (!["trayectoUsa", "trayectoLocal"].includes(trayecto)) {
+      res.status(400).json({ error: "trayecto must be 'trayectoUsa' or 'trayectoLocal'" });
+      return;
+    }
+
+    const update: Record<string, any> = { [`${trayecto}.pagado`]: !!pagado };
+    if (pagado) update[`${trayecto}.fechaPago`] = fechaPago ? new Date(fechaPago) : new Date();
+    if (comprobanteUrl) update[`${trayecto}.comprobanteUrl`] = comprobanteUrl;
+
+    const envio = await models.enviosDomicilio
+      .findByIdAndUpdate(req.params.id, { $set: update }, { new: true })
+      .populate("paqueteId", "wr sh trackingOriginal contenido")
+      .lean();
+
+    if (!envio) {
+      res.status(404).json({ error: "Envio not found" });
+      return;
+    }
+    res.status(200).json({ envio });
   } catch (error) {
     next(error);
   }

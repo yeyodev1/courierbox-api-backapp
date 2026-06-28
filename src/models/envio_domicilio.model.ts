@@ -1,14 +1,23 @@
 import mongoose, { Schema, type Document } from "mongoose";
 
+export interface ITrayectoPago {
+  proveedorId?: mongoose.Types.ObjectId;
+  proveedorNombre: string;
+  tracking: string;
+  costo: number;
+  pagado: boolean;
+  fechaPago?: Date;
+  comprobanteUrl: string;
+  notas: string;
+}
+
 export interface IEnvioDomicilio extends Document {
   paqueteId: mongoose.Types.ObjectId;
   clienteNombre: string;
   clienteDireccion: string;
   clienteTelefono: string;
-  tipoTransportista: "propio" | "externo";
-  transportistaNombre: string;
-  costoEnvio: number;
-  trackingLocal: string;
+  trayectoUsa: ITrayectoPago;
+  trayectoLocal: ITrayectoPago;
   estado: "pendiente" | "asignado" | "en_ruta" | "entregado" | "fallido";
   evidenciaUrl: string;
   notas: string;
@@ -16,6 +25,20 @@ export interface IEnvioDomicilio extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const trayectoSchema = new Schema<ITrayectoPago>(
+  {
+    proveedorId: { type: Schema.Types.ObjectId, ref: "Proveedor" },
+    proveedorNombre: { type: String, default: "" },
+    tracking: { type: String, default: "" },
+    costo: { type: Number, default: 0 },
+    pagado: { type: Boolean, default: false },
+    fechaPago: { type: Date },
+    comprobanteUrl: { type: String, default: "" },
+    notas: { type: String, default: "" },
+  },
+  { _id: false }
+);
 
 const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
   {
@@ -27,14 +50,8 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     clienteNombre: { type: String, required: true },
     clienteDireccion: { type: String, required: true },
     clienteTelefono: { type: String, default: "" },
-    tipoTransportista: {
-      type: String,
-      enum: ["propio", "externo"],
-      default: "externo",
-    },
-    transportistaNombre: { type: String, default: "" },
-    costoEnvio: { type: Number, default: 0 },
-    trackingLocal: { type: String, default: "" },
+    trayectoUsa: { type: trayectoSchema, default: () => ({}) },
+    trayectoLocal: { type: trayectoSchema, default: () => ({}) },
     estado: {
       type: String,
       enum: ["pendiente", "asignado", "en_ruta", "entregado", "fallido"],
