@@ -16,6 +16,8 @@ import { etlRouter } from "./routes/etl.routes.js";
 import { facturacionRouter } from "./routes/facturacion.routes.js";
 import { conciliacionRouter } from "./routes/conciliacion.routes.js";
 import { asesoriaRouter } from "./routes/asesoria.routes.js";
+import costosRouter from "./routes/costos.routes.js";
+import enviosRouter from "./routes/envios.routes.js";
 
 export function createApp() {
   const app = express();
@@ -68,6 +70,8 @@ export function createApp() {
   app.use("/api/v1/facturacion", facturacionRouter);
   app.use("/api/v1/conciliacion", conciliacionRouter);
   app.use("/api/v1/asesoria", asesoriaRouter);
+  app.use("/api/v1/costos", costosRouter);
+  app.use("/api/v1/envios", enviosRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);

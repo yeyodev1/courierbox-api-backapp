@@ -2,7 +2,7 @@ import "dotenv/config";
 import { dbConnect } from "./db/mongo.js";
 import { env } from "./config/env.js";
 import { createApp } from "./app.js";
-const port = process.env.PORT || 8100;
+const port = process.env.PORT || 8101;
 const { app, server } = createApp();
 
 // Initiate DB connection (non-blocking for startup)

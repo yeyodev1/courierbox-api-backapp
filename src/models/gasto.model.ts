@@ -1,0 +1,42 @@
+import mongoose, { Schema, type Document } from "mongoose";
+
+export interface IGasto extends Document {
+  tipo: "operacional" | "logistico" | "envio";
+  categoria: string;
+  monto: number;
+  descripcion: string;
+  fecha: Date;
+  proveedor: string;
+  referencia: string;
+  comprobanteUrl: string;
+  paqueteId?: mongoose.Types.ObjectId;
+  creadoPor: mongoose.Types.ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const gastoSchema = new Schema<IGasto>(
+  {
+    tipo: {
+      type: String,
+      enum: ["operacional", "logistico", "envio"],
+      required: true,
+    },
+    categoria: { type: String, required: true },
+    monto: { type: Number, required: true, min: 0 },
+    descripcion: { type: String, required: true },
+    fecha: { type: Date, required: true, default: Date.now },
+    proveedor: { type: String, default: "" },
+    referencia: { type: String, default: "" },
+    comprobanteUrl: { type: String, default: "" },
+    paqueteId: { type: Schema.Types.ObjectId, ref: "Paquete" },
+    creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  },
+  { timestamps: true }
+);
+
+gastoSchema.index({ tipo: 1, fecha: -1 });
+gastoSchema.index({ fecha: -1 });
+gastoSchema.index({ categoria: 1 });
+
+export const Gasto = mongoose.model<IGasto>("Gasto", gastoSchema);

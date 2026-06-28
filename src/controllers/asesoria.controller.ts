@@ -13,6 +13,12 @@ import {
   attachTransferProof,
   attachPaymentLink,
   getAsesorStats,
+  shareOrder,
+  unshareOrder,
+  getOrderByViewToken,
+  markViewTokenUsed,
+  resetViewToken,
+  searchClientHistory,
 } from "../services/purchase_order.service.js";
 import type { IFeeConfig } from "../models/fee_config.model.js";
 
@@ -156,11 +162,12 @@ export async function deleteFeeConfig(req: Request, res: Response, next: NextFun
 
 export async function listOrders(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { status, paymentStatus, limit, offset } = req.query;
+    const { status, paymentStatus, limit, offset, includeShared } = req.query;
     const filters = {
       ...asesorFilter(req),
       status: status as string | undefined,
       paymentStatus: paymentStatus as string | undefined,
+      includeShared: includeShared === "true",
       limit: limit ? parseInt(limit as string, 10) : undefined,
       offset: offset ? parseInt(offset as string, 10) : undefined,
     };
@@ -212,6 +219,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
       configId,
       manualFeeAmount,
       manualTotalAmount,
+      serviceType,
     } = req.body;
 
     if (!clientName || !description || typeof productValue !== "number") {
@@ -235,6 +243,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
       configId,
       manualFeeAmount: typeof manualFeeAmount === "number" ? manualFeeAmount : undefined,
       manualTotalAmount: typeof manualTotalAmount === "number" ? manualTotalAmount : undefined,
+      serviceType,
     });
 
     res.status(201).json({ order });
@@ -251,7 +260,8 @@ export async function patchOrderStatus(req: Request, res: Response, next: NextFu
       res.status(400).json({ error: "status is required" });
       return;
     }
-    const order = await updateOrderStatus(id, status, adminNotes);
+    const user = getUser(req);
+    const order = await updateOrderStatus(id, status, adminNotes, user?.userId, user?.email);
     if (!order) {
       res.status(404).json({ error: "Order not found" });
       return;
@@ -270,7 +280,8 @@ export async function patchPaymentStatus(req: Request, res: Response, next: Next
       res.status(400).json({ error: "paymentStatus is required" });
       return;
     }
-    const order = await updatePaymentStatus(id, paymentStatus, adminNotes);
+    const user = getUser(req);
+    const order = await updatePaymentStatus(id, paymentStatus, adminNotes, user?.userId, user?.email);
     if (!order) {
       res.status(404).json({ error: "Order not found" });
       return;
@@ -391,6 +402,140 @@ export async function getStats(req: Request, res: Response, next: NextFunction):
     const filter = asesorFilter(req);
     const stats = await getAsesorStats(filter.asesorId);
     res.status(200).json({ stats });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── SHARING ──────────────────────────────────────────
+
+export async function postShareOrder(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    const id = String(req.params.id);
+    const { targetAsesorId } = req.body;
+    if (!targetAsesorId) {
+      res.status(400).json({ error: "targetAsesorId is required" });
+      return;
+    }
+
+    const order = await getPurchaseOrderById(id);
+    if (!order) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+
+    const isOwner = order.asesorId.toString() === user.userId;
+    const isAdmin = user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      res.status(403).json({ error: "Only the owner or admin can share this order" });
+      return;
+    }
+
+    const updated = await shareOrder(id, targetAsesorId, user.userId, user.email);
+    res.status(200).json({ order: updated });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deleteShareOrder(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    const id = String(req.params.id);
+    const targetAsesorId = String(req.params.targetAsesorId);
+
+    const order = await getPurchaseOrderById(id);
+    if (!order) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+
+    const isOwner = order.asesorId.toString() === user.userId;
+    const isAdmin = user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      res.status(403).json({ error: "Only the owner or admin can unshare this order" });
+      return;
+    }
+
+    const updated = await unshareOrder(id, targetAsesorId, user.userId, user.email);
+    res.status(200).json({ order: updated });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── VIEW TOKEN (public) ─────────────────────────────
+
+export async function getOrderByToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const token = String(req.params.token);
+    const order = await getOrderByViewToken(token);
+    if (!order) {
+      res.status(404).json({ error: "Order not found or invalid token" });
+      return;
+    }
+
+    const wasAlreadyUsed = order.viewTokenUsed;
+
+    if (!wasAlreadyUsed) {
+      await markViewTokenUsed(token);
+    }
+
+    res.status(200).json({
+      order: {
+        _id: order._id,
+        clientName: order.clientName,
+        storeName: order.storeName,
+        description: order.description,
+        productValue: order.productValue,
+        shippingValue: order.shippingValue,
+        totalAmount: order.totalAmount,
+        currency: order.currency,
+        serviceType: order.serviceType,
+        status: order.status,
+        trackingUsa: order.trackingUsa,
+        auditLog: order.auditLog,
+        createdAt: order.createdAt,
+        wasAlreadyUsed,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── RESET VIEW TOKEN ────────────────────────────────
+
+export async function postResetViewToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = String(req.params.id);
+    const order = await resetViewToken(id);
+    if (!order) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    res.status(200).json({ order });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── CLIENT SEARCH ────────────────────────────────────
+
+export async function searchClients(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { q } = req.query;
+    if (!q || typeof q !== "string") {
+      res.status(400).json({ error: "q query param is required" });
+      return;
+    }
+    const orders = await searchClientHistory(q);
+    res.status(200).json({ orders });
   } catch (error) {
     next(error);
   }

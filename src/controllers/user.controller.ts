@@ -4,7 +4,13 @@ import { models } from "../models/index.js";
 
 export async function getUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const users = await models.users.find().select("-passwordHash").sort({ createdAt: -1 });
+    const { q } = req.query;
+    let query = {};
+    if (q && typeof q === "string" && q.trim()) {
+      const regex = new RegExp(q.trim(), "i");
+      query = { $or: [{ name: regex }, { email: regex }] };
+    }
+    const users = await models.users.find(query).select("-passwordHash").sort({ createdAt: -1 });
     res.status(200).json({ users });
   } catch (error) {
     console.error("[user.controller] getUsers error:", error);

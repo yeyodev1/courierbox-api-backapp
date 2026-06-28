@@ -1,6 +1,8 @@
+import crypto from "crypto";
 import { models } from "../models/index.js";
 import { calculateFee } from "./fee.service.js";
-import type { IPurchaseOrder } from "../models/purchase_order.model.js";
+import { sendCompraConfirmacion } from "./email.service.js";
+import type { IPurchaseOrder, ServiceType, IAuditEntry } from "../models/purchase_order.model.js";
 
 export interface CreateOrderInput {
   asesorId: string;
@@ -18,6 +20,15 @@ export interface CreateOrderInput {
   configId?: string;
   manualFeeAmount?: number;
   manualTotalAmount?: number;
+  serviceType?: ServiceType;
+}
+
+function generateViewToken(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function auditEntry(action: string, userId: string, userName: string, notes: string = ""): IAuditEntry {
+  return { timestamp: new Date(), action, userId, userName, notes };
 }
 
 export async function createPurchaseOrder(input: CreateOrderInput): Promise<IPurchaseOrder> {
@@ -48,6 +59,9 @@ export async function createPurchaseOrder(input: CreateOrderInput): Promise<IPur
     });
   }
 
+  const viewToken = generateViewToken();
+  const entry = auditEntry("creada", input.asesorId, input.clientName, "Orden creada por el asesor");
+
   const order = await models.purchaseOrders.create({
     asesorId: input.asesorId,
     clientName: input.clientName,
@@ -64,9 +78,12 @@ export async function createPurchaseOrder(input: CreateOrderInput): Promise<IPur
     feeRuleApplied: `${feeResult.configName} (${feeResult.ruleType})`,
     totalAmount: feeResult.totalAmount,
     currency: feeResult.currency,
+    serviceType: input.serviceType || "compra_total",
     status: "borrador",
     paymentStatus: "pendiente",
     notes: input.notes || "",
+    viewToken,
+    auditLog: [entry],
   });
 
   return order;
@@ -76,13 +93,42 @@ export async function listPurchaseOrders(filters: {
   asesorId?: string;
   status?: string;
   paymentStatus?: string;
+  includeShared?: boolean;
+  serviceType?: string;
+  clientSearch?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ orders: IPurchaseOrder[]; total: number }> {
   const query: Record<string, any> = {};
-  if (filters.asesorId) query.asesorId = filters.asesorId;
+  if (filters.asesorId) {
+    if (filters.includeShared) {
+      query.$or = [
+        { asesorId: filters.asesorId },
+        { "sharedWith.asesorId": filters.asesorId },
+      ];
+    } else {
+      query.asesorId = filters.asesorId;
+    }
+  }
   if (filters.status) query.status = filters.status;
   if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
+  if (filters.serviceType) query.serviceType = filters.serviceType;
+  if (filters.clientSearch) {
+    const regex = new RegExp(filters.clientSearch, "i");
+    const clientQuery = {
+      $or: [
+        { clientName: regex },
+        { clientEmail: regex },
+        { clientPhone: regex },
+      ],
+    };
+    if (query.$or) {
+      query.$and = [{ $or: query.$or }, clientQuery];
+      delete query.$or;
+    } else {
+      query.$or = clientQuery.$or;
+    }
+  }
 
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
@@ -108,12 +154,78 @@ export async function getPurchaseOrderById(id: string): Promise<IPurchaseOrder |
 export async function updateOrderStatus(
   id: string,
   status: IPurchaseOrder["status"],
-  adminNotes?: string
+  adminNotes?: string,
+  userId?: string,
+  userName?: string,
 ): Promise<IPurchaseOrder | null> {
   const update: Record<string, any> = { status };
   if (adminNotes !== undefined) update.adminNotes = adminNotes;
+
+  const entry = auditEntry(
+    `status_${status}`,
+    userId || "",
+    userName || "",
+    adminNotes || `Estado cambiado a ${status}`
+  );
+
+  const order = await models.purchaseOrders
+    .findByIdAndUpdate(id, { $set: update, $push: { auditLog: entry } }, { new: true })
+    .populate("asesorId", "name email")
+    .lean() as IPurchaseOrder | null;
+
+  if (order && status === "comprado" && order.clientEmail) {
+    sendCompraConfirmacion({
+      to: order.clientEmail,
+      clientName: order.clientName,
+      orderId: order._id.toString(),
+      storeName: order.storeName,
+      description: order.description,
+      totalAmount: order.totalAmount,
+      trackingUsa: order.trackingUsa,
+    });
+  }
+
+  return order;
+}
+
+export async function shareOrder(
+  orderId: string,
+  targetAsesorId: string,
+  userId?: string,
+  userName?: string
+): Promise<IPurchaseOrder | null> {
+  const entry = auditEntry("compartida", userId || "", userName || "", `Compartida con asesor ${targetAsesorId}`);
+
   return models.purchaseOrders
-    .findByIdAndUpdate(id, { $set: update }, { new: true })
+    .findByIdAndUpdate(
+      orderId,
+      {
+        $addToSet: { sharedWith: { asesorId: targetAsesorId, sharedAt: new Date() } },
+        $push: { auditLog: entry },
+      },
+      { new: true }
+    )
+    .populate("asesorId", "name email")
+    .lean() as Promise<IPurchaseOrder | null>;
+}
+
+export async function unshareOrder(
+  orderId: string,
+  targetAsesorId: string,
+  userId?: string,
+  userName?: string
+): Promise<IPurchaseOrder | null> {
+  const entry = auditEntry("compartir_revocada", userId || "", userName || "", `Acceso revocado a asesor ${targetAsesorId}`);
+
+  return models.purchaseOrders
+    .findByIdAndUpdate(
+      orderId,
+      {
+        $pull: { sharedWith: { asesorId: targetAsesorId } },
+        $push: { auditLog: entry },
+      },
+      { new: true }
+    )
     .populate("asesorId", "name email")
     .lean() as Promise<IPurchaseOrder | null>;
 }
@@ -121,13 +233,23 @@ export async function updateOrderStatus(
 export async function updatePaymentStatus(
   id: string,
   paymentStatus: IPurchaseOrder["paymentStatus"],
-  adminNotes?: string
+  adminNotes?: string,
+  userId?: string,
+  userName?: string
 ): Promise<IPurchaseOrder | null> {
   const update: Record<string, any> = { paymentStatus };
   if (paymentStatus === "pagado") update.paidAt = new Date();
   if (adminNotes !== undefined) update.adminNotes = adminNotes;
+
+  const entry = auditEntry(
+    `pago_${paymentStatus}`,
+    userId || "",
+    userName || "",
+    adminNotes || `Estado de pago: ${paymentStatus}`
+  );
+
   return models.purchaseOrders
-    .findByIdAndUpdate(id, { $set: update }, { new: true })
+    .findByIdAndUpdate(id, { $set: update, $push: { auditLog: entry } }, { new: true })
     .populate("asesorId", "name email")
     .lean() as Promise<IPurchaseOrder | null>;
 }
@@ -136,8 +258,17 @@ export async function attachTransferProof(
   id: string,
   proofUrl: string,
   reference?: string,
-  notes?: string
+  notes?: string,
+  userId?: string,
+  userName?: string
 ): Promise<IPurchaseOrder | null> {
+  const entry = auditEntry(
+    "comprobante_subido",
+    userId || "",
+    userName || "",
+    notes || "Comprobante de transferencia subido"
+  );
+
   return models.purchaseOrders
     .findByIdAndUpdate(
       id,
@@ -148,6 +279,7 @@ export async function attachTransferProof(
           transferNotes: notes || "",
           paymentStatus: "verificando",
         },
+        $push: { auditLog: entry },
       },
       { new: true }
     )
@@ -158,16 +290,63 @@ export async function attachTransferProof(
 export async function attachPaymentLink(
   id: string,
   paymentLink: string,
-  paymentId: string
+  paymentId: string,
+  userId?: string,
+  userName?: string
 ): Promise<IPurchaseOrder | null> {
+  const entry = auditEntry("link_pago_generado", userId || "", userName || "", "Link de pago generado");
+
   return models.purchaseOrders
     .findByIdAndUpdate(
       id,
-      { $set: { paymentLinkUrl: paymentLink, paymentId } },
+      { $set: { paymentLinkUrl: paymentLink, paymentId }, $push: { auditLog: entry } },
       { new: true }
     )
     .populate("asesorId", "name email")
     .lean() as Promise<IPurchaseOrder | null>;
+}
+
+export async function getOrderByViewToken(token: string): Promise<IPurchaseOrder | null> {
+  return models.purchaseOrders
+    .findOne({ viewToken: token })
+    .populate("asesorId", "name email")
+    .lean() as Promise<IPurchaseOrder | null>;
+}
+
+export async function markViewTokenUsed(token: string, userId?: string, userName?: string): Promise<IPurchaseOrder | null> {
+  const entry = auditEntry("cliente_visto", userId || "", userName || "Cliente", "El cliente visualizó el pedido");
+  return models.purchaseOrders
+    .findOneAndUpdate(
+      { viewToken: token, viewTokenUsed: false },
+      { $set: { viewTokenUsed: true }, $push: { auditLog: entry } },
+      { new: true }
+    )
+    .populate("asesorId", "name email")
+    .lean() as Promise<IPurchaseOrder | null>;
+}
+
+export async function resetViewToken(id: string): Promise<IPurchaseOrder | null> {
+  const viewToken = generateViewToken();
+  return models.purchaseOrders
+    .findByIdAndUpdate(id, { $set: { viewToken, viewTokenUsed: false } }, { new: true })
+    .populate("asesorId", "name email")
+    .lean() as Promise<IPurchaseOrder | null>;
+}
+
+export async function searchClientHistory(query: string): Promise<IPurchaseOrder[]> {
+  const regex = new RegExp(query, "i");
+  return models.purchaseOrders
+    .find({
+      $or: [
+        { clientName: regex },
+        { clientEmail: regex },
+        { clientPhone: regex },
+      ],
+    })
+    .populate("asesorId", "name email")
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean() as unknown as IPurchaseOrder[];
 }
 
 export async function getAsesorStats(asesorId?: string): Promise<{

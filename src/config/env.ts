@@ -2,7 +2,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const schema = z.object({
-  PORT: z.coerce.number().int().positive().default(8100),
+  PORT: z.coerce.number().int().positive().default(8101),
   NODE_ENV: z.preprocess(
     (val) => (typeof val === "string" ? val.trim() : val),
     z.enum(["development", "production", "test"])
@@ -45,6 +45,10 @@ const schema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().default(""),
   CLOUDINARY_API_KEY: z.string().default(""),
   CLOUDINARY_API_SECRET: z.string().default(""),
+
+  // --- Resend Email ---
+  RESEND_API_KEY: z.string().default(""),
+  EMAIL_FROM: z.string().email().default("courierboxlogistics@bakano.ec"),
 });
 
 const parsed = schema.safeParse(process.env);

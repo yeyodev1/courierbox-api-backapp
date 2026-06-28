@@ -17,12 +17,21 @@ import {
   generateOrderPaymentLink,
   uploadOrderTransfer,
   getStats,
+  postShareOrder,
+  deleteShareOrder,
+  getOrderByToken,
+  postResetViewToken,
+  searchClients,
 } from "../controllers/asesoria.controller.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 export const asesoriaRouter = Router();
 
+// ─── PUBLIC: view order by unique token (no auth) ──────────
+asesoriaRouter.get("/orders/view/:token", getOrderByToken);
+
+// ─── AUTHENTICATED ───────────────────────────────
 asesoriaRouter.use(requireAuth);
 asesoriaRouter.use(requireRole(["admin", "asesor"]));
 
@@ -45,6 +54,16 @@ asesoriaRouter.patch("/orders/:id/status", requireRole(["admin"]), patchOrderSta
 asesoriaRouter.patch("/orders/:id/payment-status", requireRole(["admin"]), patchPaymentStatus);
 asesoriaRouter.post("/orders/:id/payment-link", generateOrderPaymentLink);
 asesoriaRouter.post("/orders/:id/transfer", upload.single("proof"), uploadOrderTransfer);
+
+// Sharing (owner + admin)
+asesoriaRouter.post("/orders/:id/share", postShareOrder);
+asesoriaRouter.delete("/orders/:id/share/:targetAsesorId", deleteShareOrder);
+
+// View token management
+asesoriaRouter.post("/orders/:id/reset-view-token", postResetViewToken);
+
+// Client search
+asesoriaRouter.get("/clientes/search", searchClients);
 
 // Stats
 asesoriaRouter.get("/stats", getStats);
