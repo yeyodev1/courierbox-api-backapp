@@ -72,3 +72,49 @@ export async function sendCompraConfirmacion(params: {
     console.error("[email] failed to send:", err);
   }
 }
+
+export async function sendCredenciales(params: {
+  to: string;
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+  loginUrl: string;
+}): Promise<void> {
+  const client = getClient();
+  if (!client) return;
+
+  const roleLabel =
+    params.role === "admin"
+      ? "Administrador"
+      : params.role === "asesor"
+        ? "Asesor de compras"
+        : "Usuario";
+
+  try {
+    await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: `Tus credenciales de acceso · Courier Box`,
+      text: `Hola ${params.name},
+
+Se ha creado una cuenta para ti en el panel de administraci\u00f3n de Courier Box.
+
+Tus credenciales de acceso son:
+
+  Correo:      ${params.email}
+  Contrase\u00f1a:  ${params.password}
+  Rol:         ${roleLabel}
+
+Ingresa aqu\u00ed: ${params.loginUrl}
+
+Por seguridad, te recomendamos cambiar tu contrase\u00f1a despu\u00e9s de iniciar sesi\u00f3n.
+
+--
+Courier Box Logistics`,
+    });
+    console.log(`[email] credentials sent to ${params.to}`);
+  } catch (err) {
+    console.error("[email] failed to send credentials:", err);
+  }
+}
