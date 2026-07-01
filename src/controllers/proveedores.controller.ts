@@ -1,5 +1,15 @@
 import type { Request, Response, NextFunction } from "express";
 import { models } from "../models/index.js";
+import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize.js";
+
+function mergeDefined<T extends Record<string, any>>(target: T, source: Partial<T>) {
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && value !== null && value !== "") {
+      (target as Record<string, any>)[key] = value;
+    }
+  }
+  return target;
+}
 
 export async function listProveedores(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -52,8 +62,41 @@ export async function createProveedor(req: Request, res: Response, next: NextFun
       return;
     }
 
+    const nombreNormalizado = normalizeProveedorNombre(nombre);
+    const nombreCanonico = canonicalProveedorNombre(nombre);
+    const existing = await models.proveedores.findOne({ nombreNormalizado }).lean();
+
+    if (existing) {
+      const proveedor = await models.proveedores
+        .findByIdAndUpdate(
+          existing._id,
+          {
+            $set: mergeDefined(
+              {
+                nombre: existing.nombre || nombreCanonico,
+                nombreNormalizado,
+                tipo: existing.tipo || tipo || "",
+                pais: existing.pais || pais || "",
+                ciudad: existing.ciudad || ciudad || "",
+                contacto: existing.contacto || contacto || "",
+                telefono: existing.telefono || telefono || "",
+                email: existing.email || email || "",
+                notas: existing.notas || notas || "",
+              },
+              {}
+            ),
+          },
+          { new: true }
+        )
+        .lean();
+
+      res.status(200).json({ proveedor, merged: true });
+      return;
+    }
+
     const proveedor = await models.proveedores.create({
-      nombre,
+      nombre: nombreCanonico,
+      nombreNormalizado,
       tipo: tipo || "",
       pais: pais || "",
       ciudad: ciudad || "",
@@ -73,6 +116,32 @@ export async function updateProveedor(req: Request, res: Response, next: NextFun
   try {
     const updates = req.body;
     delete updates._id;
+
+    if (typeof updates.nombre === "string") {
+      updates.nombre = canonicalProveedorNombre(updates.nombre);
+      updates.nombreNormalizado = normalizeProveedorNombre(updates.nombre);
+    }
+
+    if (updates.nombreNormalizado) {
+      const collision = await models.proveedores.findOne({
+        nombreNormalizado: updates.nombreNormalizado,
+        _id: { $ne: req.params.id },
+      }).lean();
+
+      if (collision) {
+        const proveedor = await models.proveedores
+          .findByIdAndUpdate(
+            collision._id,
+            { $set: mergeDefined({ ...collision, ...updates, nombre: updates.nombre || collision.nombre }, updates) },
+            { new: true }
+          )
+          .lean();
+
+        await models.proveedores.findByIdAndDelete(req.params.id).lean();
+        res.status(200).json({ proveedor, merged: true });
+        return;
+      }
+    }
 
     const proveedor = await models.proveedores.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).lean();
     if (!proveedor) {

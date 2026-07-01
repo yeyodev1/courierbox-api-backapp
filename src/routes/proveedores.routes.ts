@@ -7,13 +7,20 @@ import {
   updateProveedor,
   deleteProveedor,
 } from "../controllers/proveedores.controller.js";
+import { addProviderType, deleteProviderType, listProviderTypes } from "../controllers/provider-types.controller.js";
 
 export const proveedoresRouter = Router();
+const providerTypesRouter = Router();
 
 proveedoresRouter.use(requireAuth);
-proveedoresRouter.use(requireRole(["admin"]));
+proveedoresRouter.use(requireRole(["admin", "gerencia", "superadmin"]));
+
+providerTypesRouter.get("/", listProviderTypes);
+providerTypesRouter.post("/", addProviderType);
+providerTypesRouter.delete("/:type", deleteProviderType);
 
 proveedoresRouter.get("/", listProveedores);
+proveedoresRouter.use("/tipos", providerTypesRouter);
 proveedoresRouter.get("/:id", getProveedor);
 proveedoresRouter.post("/", createProveedor);
 proveedoresRouter.patch("/:id", updateProveedor);

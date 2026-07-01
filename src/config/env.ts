@@ -28,6 +28,8 @@ const schema = z.object({
   JWT_SECRET: z.string().min(10, "JWT_SECRET is required"),
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(1),
+  SUPERADMIN_EMAIL: z.string().email().default("ougarte@courierboxlogistics.com"),
+  SUPERADMIN_PASSWORD: z.string().min(1).default("123456789"),
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),
   GHL_ACCESS_TOKEN: z.string().min(1, "GHL_ACCESS_TOKEN is required"),

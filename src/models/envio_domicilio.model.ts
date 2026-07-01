@@ -13,9 +13,21 @@ export interface ITrayectoPago {
 
 export interface IEnvioDomicilio extends Document {
   paqueteId: mongoose.Types.ObjectId;
+  modo: "local" | "interprovincial";
   clienteNombre: string;
   clienteDireccion: string;
   clienteTelefono: string;
+  numeroInvoice: string;
+  ciudadDestino: string;
+  proveedorUtilizado: string;
+  valorCobrado: number;
+  valorPagadoProveedor: number;
+  guiaUrl: string;
+  fotoEntregaUrl: string;
+  firmaUrl: string;
+  novedad: string;
+  entregadoEn?: Date;
+  entregadoPor?: mongoose.Types.ObjectId;
   trayectoUsa: ITrayectoPago;
   trayectoLocal: ITrayectoPago;
   estado: "pendiente" | "asignado" | "en_ruta" | "entregado" | "fallido";
@@ -47,9 +59,21 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
       ref: "Paquete",
       required: true,
     },
+    modo: { type: String, enum: ["local", "interprovincial"], default: "local" },
     clienteNombre: { type: String, required: true },
     clienteDireccion: { type: String, required: true },
     clienteTelefono: { type: String, default: "" },
+    numeroInvoice: { type: String, default: "" },
+    ciudadDestino: { type: String, default: "" },
+    proveedorUtilizado: { type: String, default: "" },
+    valorCobrado: { type: Number, default: 0, min: 0 },
+    valorPagadoProveedor: { type: Number, default: 0, min: 0 },
+    guiaUrl: { type: String, default: "" },
+    fotoEntregaUrl: { type: String, default: "" },
+    firmaUrl: { type: String, default: "" },
+    novedad: { type: String, default: "" },
+    entregadoEn: { type: Date },
+    entregadoPor: { type: Schema.Types.ObjectId, ref: "User" },
     trayectoUsa: { type: trayectoSchema, default: () => ({}) },
     trayectoLocal: { type: trayectoSchema, default: () => ({}) },
     estado: {
@@ -66,6 +90,7 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
 
 envioDomicilioSchema.index({ paqueteId: 1 });
 envioDomicilioSchema.index({ estado: 1 });
+envioDomicilioSchema.index({ modo: 1, createdAt: -1 });
 
 export const EnvioDomicilio = mongoose.model<IEnvioDomicilio>(
   "EnvioDomicilio",

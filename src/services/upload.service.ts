@@ -45,3 +45,15 @@ export async function uploadTransferProof(buffer: Buffer): Promise<UploadResult>
 export async function uploadExcel(buffer: Buffer): Promise<UploadResult> {
   return uploadBuffer(buffer, "courierbox/etl");
 }
+
+export async function uploadEnvioEvidencia(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/envios/evidencias");
+}
+
+export async function uploadEnvioGuia(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/envios/guias");
+}
+
+export async function uploadGastoFactura(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/gastos/facturas");
+}

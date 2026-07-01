@@ -9,6 +9,9 @@ import { PurchaseOrder } from "./purchase_order.model.js";
 import { Gasto } from "./gasto.model.js";
 import { EnvioDomicilio } from "./envio_domicilio.model.js";
 import { Proveedor } from "./proveedor.model.js";
+import { ProviderTypeCatalog } from "./provider_type_catalog.model.js";
+import { CajaMovimiento } from "./caja_movimiento.model.js";
+import { ProduccionDiaria } from "./produccion_diaria.model.js";
 
 export const models = {
   payments: Payment,
@@ -22,4 +25,7 @@ export const models = {
   gastos: Gasto,
   enviosDomicilio: EnvioDomicilio,
   proveedores: Proveedor,
+  providerTypeCatalog: ProviderTypeCatalog,
+  cajaMovimientos: CajaMovimiento,
+  produccionDiaria: ProduccionDiaria,
 };

@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { models } from "../models/index.js";
+import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service.js";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -59,7 +60,21 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const { paqueteId, clienteNombre, clienteDireccion, clienteTelefono, trayectoUsa, trayectoLocal, notas } = req.body;
+    const {
+      paqueteId,
+      modo,
+      clienteNombre,
+      clienteDireccion,
+      clienteTelefono,
+      numeroInvoice,
+      ciudadDestino,
+      proveedorUtilizado,
+      valorCobrado,
+      valorPagadoProveedor,
+      trayectoUsa,
+      trayectoLocal,
+      notas,
+    } = req.body;
 
     if (!paqueteId || !clienteNombre || !clienteDireccion) {
       res.status(400).json({ error: "paqueteId, clienteNombre, clienteDireccion are required" });
@@ -68,9 +83,15 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
 
     const envio = await models.enviosDomicilio.create({
       paqueteId,
+      modo: modo === "interprovincial" ? "interprovincial" : "local",
       clienteNombre,
       clienteDireccion,
       clienteTelefono: clienteTelefono || "",
+      numeroInvoice: numeroInvoice || "",
+      ciudadDestino: ciudadDestino || "",
+      proveedorUtilizado: proveedorUtilizado || "",
+      valorCobrado: Number(valorCobrado) || 0,
+      valorPagadoProveedor: Number(valorPagadoProveedor) || 0,
       trayectoUsa: {
         proveedorNombre: trayectoUsa?.proveedorNombre || "",
         tracking: trayectoUsa?.tracking || "",
@@ -109,6 +130,86 @@ export async function updateEnvio(req: Request, res: Response, next: NextFunctio
       return;
     }
     res.status(200).json({ envio });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function uploadEnvioArchivo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { tipo } = req.body;
+    if (!req.file) {
+      res.status(400).json({ error: "file is required" });
+      return;
+    }
+
+    const upload = tipo === "guia" ? await uploadEnvioGuia(req.file.buffer) : await uploadEnvioEvidencia(req.file.buffer);
+    const field = tipo === "guia" ? "guiaUrl" : tipo === "firma" ? "firmaUrl" : "fotoEntregaUrl";
+
+    const envio = await models.enviosDomicilio
+      .findByIdAndUpdate(req.params.id, { $set: { [field]: upload.url } }, { new: true })
+      .populate("paqueteId", "wr sh trackingOriginal contenido")
+      .lean();
+
+    if (!envio) {
+      res.status(404).json({ error: "Envio not found" });
+      return;
+    }
+
+    res.status(200).json({ envio, upload });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function marcarEntregado(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    const envio = await models.enviosDomicilio
+      .findByIdAndUpdate(
+        req.params.id,
+        {
+          $set: {
+            estado: "entregado",
+            entregadoEn: new Date(),
+            entregadoPor: user?.userId,
+            evidenciaUrl: req.body.evidenciaUrl || "",
+            novedad: req.body.novedad || "",
+          },
+        },
+        { new: true }
+      )
+      .populate("paqueteId", "wr sh trackingOriginal contenido")
+      .lean();
+
+    if (!envio) {
+      res.status(404).json({ error: "Envio not found" });
+      return;
+    }
+
+    res.status(200).json({ envio });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function resumenEnvios(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const [locales, interprovinciales] = await Promise.all([
+      models.enviosDomicilio.aggregate([
+        { $match: { modo: "local" } },
+        { $group: { _id: null, total: { $sum: 1 }, cobrados: { $sum: "$valorCobrado" }, novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } } } },
+      ]),
+      models.enviosDomicilio.aggregate([
+        { $match: { modo: "interprovincial" } },
+        { $group: { _id: null, total: { $sum: 1 }, cobrados: { $sum: "$valorCobrado" }, pagados: { $sum: "$valorPagadoProveedor" }, novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } } } },
+      ]),
+    ]);
+
+    res.status(200).json({
+      locales: locales[0] || { total: 0, cobrados: 0 },
+      interprovinciales: interprovinciales[0] || { total: 0, cobrados: 0, pagados: 0 },
+    });
   } catch (error) {
     next(error);
   }

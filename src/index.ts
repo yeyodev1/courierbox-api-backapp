@@ -2,12 +2,17 @@ import "dotenv/config";
 import { dbConnect } from "./db/mongo.js";
 import { env } from "./config/env.js";
 import { createApp } from "./app.js";
+import { ensureSuperadminUser } from "./services/bootstrap.service.js";
 const port = process.env.PORT || 8101;
 const { app, server } = createApp();
 
-// Initiate DB connection (non-blocking for startup)
-dbConnect().catch((error) => {
-  console.error("Failed to connect to MongoDB during startup:", error);
+async function bootstrap() {
+  await dbConnect();
+  await ensureSuperadminUser();
+}
+
+bootstrap().catch((error) => {
+  console.error("Failed during startup bootstrap:", error);
 });
 
 // For Vercel/serverless environments, we export the app.

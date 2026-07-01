@@ -6,6 +6,7 @@ import http from "http";
 
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error.js";
+import { requireAuth, requireRole } from "./middleware/auth.middleware.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { trackingRouter } from "./routes/tracking.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
@@ -20,6 +21,10 @@ import costosRouter from "./routes/costos.routes.js";
 import enviosRouter from "./routes/envios.routes.js";
 import { contactosRouter } from "./routes/contactos.routes.js";
 import { proveedoresRouter } from "./routes/proveedores.routes.js";
+import { addProviderType, deleteProviderType, listProviderTypes } from "./controllers/provider-types.controller.js";
+import cajaRouter from "./routes/caja.routes.js";
+import produccionRouter from "./routes/produccion.routes.js";
+import reportesRouter from "./routes/reportes.routes.js";
 
 export function createApp() {
   const app = express();
@@ -74,8 +79,14 @@ export function createApp() {
   app.use("/api/v1/asesoria", asesoriaRouter);
   app.use("/api/v1/costos", costosRouter);
   app.use("/api/v1/envios", enviosRouter);
+  app.use("/api/v1/caja", cajaRouter);
+  app.use("/api/v1/produccion", produccionRouter);
+  app.use("/api/v1/reportes", reportesRouter);
   app.use("/api/v1/contactos", contactosRouter);
   app.use("/api/v1/proveedores", proveedoresRouter);
+  app.get("/api/v1/proveedores/tipos", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), listProviderTypes);
+  app.post("/api/v1/proveedores/tipos", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), addProviderType);
+  app.delete("/api/v1/proveedores/tipos/:type", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), deleteProviderType);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);
