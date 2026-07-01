@@ -2,7 +2,7 @@ import "dotenv/config";
 import { z } from "zod";
 
 const schema = z.object({
-  PORT: z.coerce.number().int().positive().default(8100),
+  PORT: z.coerce.number().int().positive().default(8101),
   NODE_ENV: z.preprocess(
     (val) => (typeof val === "string" ? val.trim() : val),
     z.enum(["development", "production", "test"])
@@ -28,6 +28,8 @@ const schema = z.object({
   JWT_SECRET: z.string().min(10, "JWT_SECRET is required"),
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(1),
+  SUPERADMIN_EMAIL: z.string().email().default("ougarte@courierboxlogistics.com"),
+  SUPERADMIN_PASSWORD: z.string().min(1).default("123456789"),
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),
   GHL_ACCESS_TOKEN: z.string().min(1, "GHL_ACCESS_TOKEN is required"),
@@ -45,6 +47,10 @@ const schema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().default(""),
   CLOUDINARY_API_KEY: z.string().default(""),
   CLOUDINARY_API_SECRET: z.string().default(""),
+
+  // --- Resend Email ---
+  RESEND_API_KEY: z.string().default(""),
+  EMAIL_FROM: z.string().email().default("courierboxlogistics@bakano.ec"),
 });
 
 const parsed = schema.safeParse(process.env);

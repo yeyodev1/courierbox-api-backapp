@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
-import { facturarPaquetes } from "../services/facturacion.service.js";
-import { uploadComprobante } from "../services/upload.service.js";
+import { models } from "../models/index";
+import { facturarPaquetes } from "../services/facturacion.service";
+import { uploadComprobante } from "../services/upload.service";
 
 export async function generarFactura(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -98,7 +98,7 @@ export async function confirmarPago(req: Request, res: Response, next: NextFunct
       { $set: { estado: "pagado" } }
     );
 
-    const { enviarWebhookDespacho } = await import("../services/ghl-webhook.service.js");
+    const { enviarWebhookDespacho } = await import("../services/ghl-webhook.service");
     enviarWebhookDespacho({
       facturaId: factura._id.toString(),
       numeroFactura: factura.numeroFactura,

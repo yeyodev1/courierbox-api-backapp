@@ -1,7 +1,23 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
-import { ScraperError } from "../services/scraper/courierbox.scraper.js";
-import { logger } from "../utils/logger.js";
+import { ScraperError } from "../services/scraper/courierbox.scraper";
+import { logger } from "../utils/logger";
+
+function serializeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const anyErr = err as Record<string, unknown>;
+    if (typeof anyErr.message === "string" && anyErr.message.trim()) return anyErr.message;
+    if (typeof anyErr.error === "string" && anyErr.error.trim()) return anyErr.error;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
 
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   const isDev = process.env.NODE_ENV !== "production";
@@ -20,7 +36,7 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     return res.status(status).json({ error: err.kind, message: err.message });
   }
 
-  const errorMessage = err instanceof Error ? err.message : String(err);
+  const errorMessage = serializeError(err);
 
   if (isDev) {
     logger.error("[error] unhandled", { err: err instanceof Error ? err.stack : String(err) });

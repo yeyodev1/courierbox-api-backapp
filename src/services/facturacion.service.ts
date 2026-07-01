@@ -1,7 +1,7 @@
-import { models } from "../models/index.js";
-import { contificoService } from "./contifico.service.js";
-import { enviarWebhookFactura } from "./ghl-webhook.service.js";
-import { logger } from "../utils/logger.js";
+import { models } from "../models/index";
+import { contificoService } from "./contifico.service";
+import { enviarWebhookFactura } from "./ghl-webhook.service";
+import { logger } from "../utils/logger";
 
 const TARIFA_FLETE_LB = 6.50;
 const TARIFA_ARANCEL_LB = 1.99;

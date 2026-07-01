@@ -1,6 +1,6 @@
 import type { RequestHandler } from "express";
-import { trackingParams } from "../schemas/tracking.schema.js";
-import { getTracking } from "../services/tracking.service.js";
+import { trackingParams } from "../schemas/tracking.schema";
+import { getTracking } from "../services/tracking.service";
 
 export const getTrackingHandler: RequestHandler = async (req, res, next) => {
   try {

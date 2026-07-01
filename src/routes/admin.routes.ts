@@ -1,7 +1,11 @@
 import { Router } from "express";
-import { getGeneralMetrics, getAgentMetrics, getRecentConversations, getDailyChart } from "../controllers/admin.controller.js";
+import { getGeneralMetrics, getAgentMetrics, getRecentConversations, getDailyChart } from "../controllers/admin.controller";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
 export const adminRouter = Router();
+
+adminRouter.use(requireAuth);
+adminRouter.use(requireRole(["admin", "gerencia", "superadmin"]));
 
 adminRouter.get("/metrics/general", getGeneralMetrics);
 adminRouter.get("/metrics/agents", getAgentMetrics);

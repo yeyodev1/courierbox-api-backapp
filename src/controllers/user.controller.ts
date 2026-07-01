@@ -1,10 +1,17 @@
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
-import { models } from "../models/index.js";
+import { models } from "../models/index";
+import { sendCredenciales } from "../services/email.service";
 
 export async function getUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const users = await models.users.find().select("-passwordHash").sort({ createdAt: -1 });
+    const { q } = req.query;
+    let query = {};
+    if (q && typeof q === "string" && q.trim()) {
+      const regex = new RegExp(q.trim(), "i");
+      query = { $or: [{ name: regex }, { email: regex }] };
+    }
+    const users = await models.users.find(query).select("-passwordHash").sort({ createdAt: -1 });
     res.status(200).json({ users });
   } catch (error) {
     console.error("[user.controller] getUsers error:", error);
@@ -14,7 +21,7 @@ export async function getUsers(req: Request, res: Response, next: NextFunction):
 
 export async function createUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name, role, sendEmail } = req.body;
 
     if (!email || !password || !name) {
       res.status(400).json({ error: "Email, password, and name are required" });
@@ -36,6 +43,17 @@ export async function createUser(req: Request, res: Response, next: NextFunction
       name,
       role: role || "user",
     });
+
+    if (sendEmail) {
+      await sendCredenciales({
+        to: newUser.email,
+        name: newUser.name,
+        email: newUser.email,
+        password,
+        role: newUser.role,
+        loginUrl: req.body.loginUrl || "https://courierboxlogistics.com/login",
+      });
+    }
 
     res.status(201).json({
       message: "User created successfully",

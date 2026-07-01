@@ -4,18 +4,27 @@ import helmet from "helmet";
 import morgan from "morgan";
 import http from "http";
 
-import { env } from "./config/env.js";
-import { errorHandler } from "./middleware/error.js";
-import { healthRouter } from "./routes/health.routes.js";
-import { trackingRouter } from "./routes/tracking.routes.js";
-import { authRouter } from "./routes/auth.routes.js";
-import { paymentRouter } from "./routes/payment.routes.js";
-import userRouter from "./routes/user.routes.js";
-import { adminRouter } from "./routes/admin.routes.js";
-import { etlRouter } from "./routes/etl.routes.js";
-import { facturacionRouter } from "./routes/facturacion.routes.js";
-import { conciliacionRouter } from "./routes/conciliacion.routes.js";
-import { asesoriaRouter } from "./routes/asesoria.routes.js";
+import { env } from "./config/env";
+import { errorHandler } from "./middleware/error";
+import { requireAuth, requireRole } from "./middleware/auth.middleware";
+import { healthRouter } from "./routes/health.routes";
+import { trackingRouter } from "./routes/tracking.routes";
+import { authRouter } from "./routes/auth.routes";
+import { paymentRouter } from "./routes/payment.routes";
+import userRouter from "./routes/user.routes";
+import { adminRouter } from "./routes/admin.routes";
+import { etlRouter } from "./routes/etl.routes";
+import { facturacionRouter } from "./routes/facturacion.routes";
+import { conciliacionRouter } from "./routes/conciliacion.routes";
+import { asesoriaRouter } from "./routes/asesoria.routes";
+import costosRouter from "./routes/costos.routes";
+import enviosRouter from "./routes/envios.routes";
+import { contactosRouter } from "./routes/contactos.routes";
+import { proveedoresRouter } from "./routes/proveedores.routes";
+import { addProviderType, deleteProviderType, listProviderTypes } from "./controllers/provider-types.controller";
+import cajaRouter from "./routes/caja.routes";
+import produccionRouter from "./routes/produccion.routes";
+import reportesRouter from "./routes/reportes.routes";
 
 export function createApp() {
   const app = express();
@@ -68,6 +77,16 @@ export function createApp() {
   app.use("/api/v1/facturacion", facturacionRouter);
   app.use("/api/v1/conciliacion", conciliacionRouter);
   app.use("/api/v1/asesoria", asesoriaRouter);
+  app.use("/api/v1/costos", costosRouter);
+  app.use("/api/v1/envios", enviosRouter);
+  app.use("/api/v1/caja", cajaRouter);
+  app.use("/api/v1/produccion", produccionRouter);
+  app.use("/api/v1/reportes", reportesRouter);
+  app.use("/api/v1/contactos", contactosRouter);
+  app.use("/api/v1/proveedores", proveedoresRouter);
+  app.get("/api/v1/proveedores/tipos", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), listProviderTypes);
+  app.post("/api/v1/proveedores/tipos", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), addProviderType);
+  app.delete("/api/v1/proveedores/tipos/:type", requireAuth, requireRole(["admin", "gerencia", "superadmin"]), deleteProviderType);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(errorHandler);

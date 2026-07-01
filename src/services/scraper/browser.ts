@@ -1,5 +1,5 @@
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
-import { logger } from "../../utils/logger.js";
+import { logger } from "../../utils/logger";
 
 const isServerless =
   !!process.env.VERCEL ||

@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
-import { models } from "../models/index.js";
-import { similitud } from "./fuzzy.service.js";
-import { logger } from "../utils/logger.js";
+import { models } from "../models/index";
+import { similitud } from "./fuzzy.service";
+import { logger } from "../utils/logger";
 
 const UMBRAL_SIMILITUD = 0.85;
 
