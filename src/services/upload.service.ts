@@ -1,6 +1,6 @@
 import { v2 as cloudinary, type UploadApiResponse } from "cloudinary";
-import { env } from "../config/env.js";
-import { logger } from "../utils/logger.js";
+import { env } from "../config/env";
+import { logger } from "../utils/logger";
 
 cloudinary.config({
   cloud_name: env.CLOUDINARY_CLOUD_NAME || undefined,

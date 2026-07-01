@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
+import { models } from "../models/index";
 
 export const DEFAULT_PROVIDER_TYPES = [
   "Importador",

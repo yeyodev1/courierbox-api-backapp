@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
-import { env } from "../config/env.js";
-import { models } from "../models/index.js";
+import { env } from "../config/env";
+import { models } from "../models/index";
 
 export async function ensureSuperadminUser() {
   const email = env.SUPERADMIN_EMAIL.toLowerCase();

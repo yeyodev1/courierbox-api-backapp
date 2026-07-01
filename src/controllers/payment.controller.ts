@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
-import { models } from "../models/index.js";
-import { payphoneLinksService } from "../services/payphone.service.js";
+import { models } from "../models/index";
+import { payphoneLinksService } from "../services/payphone.service";
 import 'dotenv/config';
 
 export async function generatePaymentLink(req: Request, res: Response, next: NextFunction): Promise<void> {

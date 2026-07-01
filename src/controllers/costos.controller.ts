@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
-import { uploadGastoFactura } from "../services/upload.service.js";
-import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize.js";
+import { models } from "../models/index";
+import { uploadGastoFactura } from "../services/upload.service";
+import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;

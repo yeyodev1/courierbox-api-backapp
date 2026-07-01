@@ -1,12 +1,12 @@
-import { env } from "../../config/env.js";
-import { logger } from "../../utils/logger.js";
-import { withContext } from "./browser.js";
+import { env } from "../../config/env";
+import { logger } from "../../utils/logger";
+import { withContext } from "./browser";
 import type {
   EstadoCanonico,
   TrackingCosto,
   TrackingEvento,
   TrackingResult,
-} from "../../types/tracking.js";
+} from "../../types/tracking";
 import type { Page, Frame, BrowserContext } from "playwright";
 
 export class ScraperError extends Error {

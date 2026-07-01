@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
-import { listContactos, getContacto } from "../controllers/contactos.controller.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
+import { listContactos, getContacto } from "../controllers/contactos.controller";
 
 export const contactosRouter = Router();
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   postCalculate,
   getFeeConfigs,
@@ -22,7 +22,7 @@ import {
   getOrderByToken,
   postResetViewToken,
   searchClients,
-} from "../controllers/asesoria.controller.js";
+} from "../controllers/asesoria.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
 

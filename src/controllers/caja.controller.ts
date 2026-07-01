@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
+import { models } from "../models/index";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;

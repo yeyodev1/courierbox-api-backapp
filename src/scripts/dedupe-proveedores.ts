@@ -1,7 +1,7 @@
 import "dotenv/config";
-import { dbConnect } from "../db/mongo.js";
-import { models } from "../models/index.js";
-import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize.js";
+import { dbConnect } from "../db/mongo";
+import { models } from "../models/index";
+import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
 
 type ProveedorLean = {
   _id: any;

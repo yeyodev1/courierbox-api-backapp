@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
-import { logger } from "../utils/logger.js";
+import { models } from "../models/index";
+import { logger } from "../utils/logger";
 
 export async function cargarCsv(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -44,7 +44,7 @@ export async function cargarCsv(req: Request, res: Response, next: NextFunction)
       }
     }
 
-    const { enviarWebhookDespacho } = await import("../services/ghl-webhook.service.js");
+    const { enviarWebhookDespacho } = await import("../services/ghl-webhook.service");
 
     res.status(200).json({
       message: "CSV procesado",

@@ -1,8 +1,8 @@
 import "dotenv/config";
-import { dbConnect } from "./db/mongo.js";
-import { env } from "./config/env.js";
-import { createApp } from "./app.js";
-import { ensureSuperadminUser } from "./services/bootstrap.service.js";
+import { dbConnect } from "./db/mongo";
+import { env } from "./config/env";
+import { createApp } from "./app";
+import { ensureSuperadminUser } from "./services/bootstrap.service";
 const port = process.env.PORT || 8101;
 const { app, server } = createApp();
 

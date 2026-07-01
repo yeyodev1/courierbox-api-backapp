@@ -1,8 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-import { models } from "../models/index.js";
-import { env } from "../config/env.js";
+import { models } from "../models/index";
+import { env } from "../config/env";
 
 export async function login(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {

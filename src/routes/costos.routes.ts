@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   listGastos,
   getGasto,
@@ -9,7 +9,7 @@ import {
   deleteGasto,
   uploadGastoArchivo,
   resumenGastos,
-} from "../controllers/costos.controller.js";
+} from "../controllers/costos.controller";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });

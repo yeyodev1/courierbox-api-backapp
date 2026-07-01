@@ -1,13 +1,13 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   listProveedores,
   getProveedor,
   createProveedor,
   updateProveedor,
   deleteProveedor,
-} from "../controllers/proveedores.controller.js";
-import { addProviderType, deleteProviderType, listProviderTypes } from "../controllers/provider-types.controller.js";
+} from "../controllers/proveedores.controller";
+import { addProviderType, deleteProviderType, listProviderTypes } from "../controllers/provider-types.controller";
 
 export const proveedoresRouter = Router();
 const providerTypesRouter = Router();

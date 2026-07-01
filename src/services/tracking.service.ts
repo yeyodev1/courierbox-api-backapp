@@ -1,7 +1,7 @@
-import { env } from "../config/env.js";
-import { obtenerEstadoGuia, ScraperError } from "./scraper/courierbox.scraper.js";
-import type { TrackingResult } from "../types/tracking.js";
-import { logger } from "../utils/logger.js";
+import { env } from "../config/env";
+import { obtenerEstadoGuia, ScraperError } from "./scraper/courierbox.scraper";
+import type { TrackingResult } from "../types/tracking";
+import { logger } from "../utils/logger";
 
 interface CacheEntry {
   data: TrackingResult;

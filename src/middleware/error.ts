@@ -1,7 +1,7 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
-import { ScraperError } from "../services/scraper/courierbox.scraper.js";
-import { logger } from "../utils/logger.js";
+import { ScraperError } from "../services/scraper/courierbox.scraper";
+import { logger } from "../utils/logger";
 
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   const isDev = process.env.NODE_ENV !== "production";

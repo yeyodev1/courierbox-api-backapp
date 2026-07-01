@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth } from "../middleware/auth.middleware.js";
-import { cargarCsv, getPagosVerificando, getResumenConciliacion } from "../controllers/conciliacion.controller.js";
+import { requireAuth } from "../middleware/auth.middleware";
+import { cargarCsv, getPagosVerificando, getResumenConciliacion } from "../controllers/conciliacion.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
 

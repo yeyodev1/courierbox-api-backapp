@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { getUsers, createUser, updateUser, deleteUser } from "../controllers/user.controller.js";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { getUsers, createUser, updateUser, deleteUser } from "../controllers/user.controller";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
 const router = Router();
 

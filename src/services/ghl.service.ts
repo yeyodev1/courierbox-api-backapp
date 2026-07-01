@@ -1,5 +1,5 @@
 import axios from "axios";
-import { env } from "../config/env.js";
+import { env } from "../config/env";
 
 export class GHLService {
   private static baseURL = "https://services.leadconnectorhq.com";

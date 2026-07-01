@@ -1,8 +1,8 @@
 import crypto from "crypto";
-import { models } from "../models/index.js";
-import { calculateFee } from "./fee.service.js";
-import { sendCompraConfirmacion } from "./email.service.js";
-import type { IPurchaseOrder, ServiceType, IAuditEntry } from "../models/purchase_order.model.js";
+import { models } from "../models/index";
+import { calculateFee } from "./fee.service";
+import { sendCompraConfirmacion } from "./email.service";
+import type { IPurchaseOrder, ServiceType, IAuditEntry } from "../models/purchase_order.model";
 
 export interface CreateOrderInput {
   asesorId: string;

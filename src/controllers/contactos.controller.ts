@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
+import { models } from "../models/index";
 
 export async function listContactos(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {

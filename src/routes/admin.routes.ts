@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { getGeneralMetrics, getAgentMetrics, getRecentConversations, getDailyChart } from "../controllers/admin.controller.js";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { getGeneralMetrics, getAgentMetrics, getRecentConversations, getDailyChart } from "../controllers/admin.controller";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
 export const adminRouter = Router();
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   listEnvios,
   getEnvio,
@@ -13,7 +13,7 @@ import {
   uploadEnvioArchivo,
   marcarEntregado,
   resumenEnvios,
-} from "../controllers/envios.controller.js";
+} from "../controllers/envios.controller";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });

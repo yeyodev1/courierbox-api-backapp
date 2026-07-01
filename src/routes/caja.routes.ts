@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../middleware/auth.middleware.js";
-import { listCaja, createCaja, resumenCaja } from "../controllers/caja.controller.js";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
+import { listCaja, createCaja, resumenCaja } from "../controllers/caja.controller";
 
 const router = Router();
 

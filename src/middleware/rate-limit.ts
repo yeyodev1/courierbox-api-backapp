@@ -1,5 +1,5 @@
 import type { RequestHandler } from "express";
-import { env } from "../config/env.js";
+import { env } from "../config/env";
 
 interface Bucket {
   tokens: number;

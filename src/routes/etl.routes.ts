@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
-import { uploadExcel, getPendientes } from "../controllers/etl.controller.js";
-import { requireAuth } from "../middleware/auth.middleware.js";
+import { uploadExcel, getPendientes } from "../controllers/etl.controller";
+import { requireAuth } from "../middleware/auth.middleware";
 
 const upload = multer({ storage: multer.memoryStorage() });
 

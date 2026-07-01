@@ -1,9 +1,9 @@
 import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
-import { models } from "../models/index.js";
-import { calculateFee } from "../services/fee.service.js";
-import { payphoneLinksService } from "../services/payphone.service.js";
-import { uploadTransferProof } from "../services/upload.service.js";
+import { models } from "../models/index";
+import { calculateFee } from "../services/fee.service";
+import { payphoneLinksService } from "../services/payphone.service";
+import { uploadTransferProof } from "../services/upload.service";
 import {
   createPurchaseOrder,
   listPurchaseOrders,
@@ -19,8 +19,8 @@ import {
   markViewTokenUsed,
   resetViewToken,
   searchClientHistory,
-} from "../services/purchase_order.service.js";
-import type { IFeeConfig } from "../models/fee_config.model.js";
+} from "../services/purchase_order.service";
+import type { IFeeConfig } from "../models/fee_config.model";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;

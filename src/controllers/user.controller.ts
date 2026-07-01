@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
-import { models } from "../models/index.js";
-import { sendCredenciales } from "../services/email.service.js";
+import { models } from "../models/index";
+import { sendCredenciales } from "../services/email.service";
 
 export async function getUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {

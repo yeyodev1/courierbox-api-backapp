@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { getTrackingHandler, getTrackingTextHandler } from "../controllers/tracking.controller.js";
-import { rateLimit } from "../middleware/rate-limit.js";
+import { getTrackingHandler, getTrackingTextHandler } from "../controllers/tracking.controller";
+import { rateLimit } from "../middleware/rate-limit";
 
 export const trackingRouter = Router();
 

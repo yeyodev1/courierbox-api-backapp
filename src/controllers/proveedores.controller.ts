@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
-import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize.js";
+import { models } from "../models/index";
+import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
 
 function mergeDefined<T extends Record<string, any>>(target: T, source: Partial<T>) {
   for (const [key, value] of Object.entries(source)) {

@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
-import { models } from "../models/index.js";
-import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service.js";
+import { models } from "../models/index";
+import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;

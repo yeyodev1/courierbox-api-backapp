@@ -1,5 +1,5 @@
-import { models } from "../models/index.js";
-import type { IFeeConfig, IFeeTier } from "../models/fee_config.model.js";
+import { models } from "../models/index";
+import type { IFeeConfig, IFeeTier } from "../models/fee_config.model";
 
 export interface CalculateFeeInput {
   productValue: number;

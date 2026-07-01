@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { GHLService } from "../services/ghl.service.js";
+import { GHLService } from "../services/ghl.service";
 
 // Basic in-memory cache to prevent hitting GHL rate limits on multiple concurrent requests
 const cache = {

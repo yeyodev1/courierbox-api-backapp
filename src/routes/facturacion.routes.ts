@@ -1,13 +1,13 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth } from "../middleware/auth.middleware.js";
+import { requireAuth } from "../middleware/auth.middleware";
 import {
   generarFactura,
   getFacturasPendientes,
   registrarPago,
   confirmarPago,
   getHistorialFacturas,
-} from "../controllers/facturacion.controller.js";
+} from "../controllers/facturacion.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
 

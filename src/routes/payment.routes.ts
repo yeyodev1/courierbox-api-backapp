@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { generatePaymentLink, getPayments, deletePaymentLink } from "../controllers/payment.controller.js";
-import { requireAuth } from "../middleware/auth.middleware.js";
+import { generatePaymentLink, getPayments, deletePaymentLink } from "../controllers/payment.controller";
+import { requireAuth } from "../middleware/auth.middleware";
 
 export const paymentRouter = Router();
 

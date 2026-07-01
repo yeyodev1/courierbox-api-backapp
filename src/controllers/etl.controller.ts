@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
-import { procesarExcel } from "../services/etl.service.js";
-import { models } from "../models/index.js";
+import { procesarExcel } from "../services/etl.service";
+import { models } from "../models/index";
 
 export async function uploadExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
