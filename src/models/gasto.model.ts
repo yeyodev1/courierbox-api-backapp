@@ -18,6 +18,7 @@ export interface IGasto extends Document {
   valorPagado: number;
   paqueteId?: mongoose.Types.ObjectId;
   creadoPor: mongoose.Types.ObjectId;
+  updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +46,7 @@ const gastoSchema = new Schema<IGasto>(
     valorPagado: { type: Number, default: 0, min: 0 },
     paqueteId: { type: Schema.Types.ObjectId, ref: "Paquete" },
     creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );

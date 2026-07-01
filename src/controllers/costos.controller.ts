@@ -50,6 +50,7 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
       models.gastos
         .find(query)
         .populate("creadoPor", "name email")
+        .populate("updatedBy", "name email")
         .sort({ fecha: -1 })
         .skip(skip)
         .limit(take)
@@ -65,7 +66,11 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
 
 export async function getGasto(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const gasto = await models.gastos.findById(req.params.id).populate("creadoPor", "name email").lean();
+    const gasto = await models.gastos
+      .findById(req.params.id)
+      .populate("creadoPor", "name email")
+      .populate("updatedBy", "name email")
+      .lean();
     if (!gasto) {
       res.status(404).json({ error: "Gasto not found" });
       return;
@@ -125,6 +130,7 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       valorPagado: Number(valorPagado) || 0,
       paqueteId: paqueteId || undefined,
       creadoPor: user.userId,
+      updatedBy: user.userId,
     });
 
     res.status(201).json({ gasto });
@@ -135,9 +141,18 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
 
 export async function updateGasto(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
     const updates = req.body;
     delete updates._id;
     delete updates.creadoPor;
+    delete updates.updatedBy;
+    delete updates.createdAt;
+    delete updates.updatedAt;
 
     if (typeof updates.proveedor === "string") {
       const proveedorResolved = await resolveProveedor(updates.proveedor);
@@ -145,7 +160,11 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
       updates.proveedorId = proveedorResolved?._id;
     }
 
-    const gasto = await models.gastos.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true }).lean();
+    const gasto = await models.gastos
+      .findByIdAndUpdate(req.params.id, { $set: { ...updates, updatedBy: user.userId } }, { new: true })
+      .populate("creadoPor", "name email")
+      .populate("updatedBy", "name email")
+      .lean();
     if (!gasto) {
       res.status(404).json({ error: "Gasto not found" });
       return;
@@ -171,6 +190,12 @@ export async function deleteGasto(req: Request, res: Response, next: NextFunctio
 
 export async function uploadGastoArchivo(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
     if (!req.file) {
       res.status(400).json({ error: "file is required" });
       return;
@@ -178,7 +203,9 @@ export async function uploadGastoArchivo(req: Request, res: Response, next: Next
 
     const upload = await uploadGastoFactura(req.file.buffer);
     const gasto = await models.gastos
-      .findByIdAndUpdate(req.params.id, { $set: { comprobanteUrl: upload.url } }, { new: true })
+      .findByIdAndUpdate(req.params.id, { $set: { comprobanteUrl: upload.url, updatedBy: user.userId } }, { new: true })
+      .populate("creadoPor", "name email")
+      .populate("updatedBy", "name email")
       .lean();
 
     if (!gasto) {
