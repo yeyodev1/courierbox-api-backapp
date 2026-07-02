@@ -10,6 +10,8 @@ export interface IGasto extends Document {
   proveedorId?: mongoose.Types.ObjectId;
   referencia: string;
   comprobanteUrl: string;
+  comprobantePublicId?: string;
+  comprobanteResourceType?: string;
   numeroFactura: string;
   fechaFactura?: Date;
   libras: number;
@@ -38,6 +40,8 @@ const gastoSchema = new Schema<IGasto>(
     proveedorId: { type: Schema.Types.ObjectId, ref: "Proveedor" },
     referencia: { type: String, default: "" },
     comprobanteUrl: { type: String, default: "" },
+    comprobantePublicId: { type: String, default: "" },
+    comprobanteResourceType: { type: String, default: "" },
     numeroFactura: { type: String, default: "" },
     fechaFactura: { type: Date },
     libras: { type: Number, default: 0, min: 0 },

@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { models } from "../models/index";
-import { uploadGastoFactura } from "../services/upload.service";
+import { deleteCloudinaryAsset, extractCloudinaryAssetRef, uploadGastoFactura } from "../services/upload.service";
 import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
 
 function getUser(req: Request) {
@@ -153,6 +153,8 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
     delete updates.updatedBy;
     delete updates.createdAt;
     delete updates.updatedAt;
+    delete updates.comprobantePublicId;
+    delete updates.comprobanteResourceType;
 
     if (typeof updates.proveedor === "string") {
       const proveedorResolved = await resolveProveedor(updates.proveedor);
@@ -177,11 +179,24 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
 
 export async function deleteGasto(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const gasto = await models.gastos.findByIdAndDelete(req.params.id).lean();
+    const gasto = await models.gastos.findById(req.params.id).lean();
     if (!gasto) {
       res.status(404).json({ error: "Gasto not found" });
       return;
     }
+
+    const assetRef = gasto.comprobantePublicId
+      ? {
+          publicId: gasto.comprobantePublicId,
+          resourceType: gasto.comprobanteResourceType || extractCloudinaryAssetRef(gasto.comprobanteUrl || "")?.resourceType || "image",
+        }
+      : extractCloudinaryAssetRef(gasto.comprobanteUrl || "");
+
+    if (assetRef?.publicId) {
+      await deleteCloudinaryAsset(assetRef);
+    }
+
+    await models.gastos.findByIdAndDelete(req.params.id).lean();
     res.status(200).json({ message: "Gasto deleted" });
   } catch (error) {
     next(error);
@@ -203,7 +218,7 @@ export async function uploadGastoArchivo(req: Request, res: Response, next: Next
 
     const upload = await uploadGastoFactura(req.file.buffer);
     const gasto = await models.gastos
-      .findByIdAndUpdate(req.params.id, { $set: { comprobanteUrl: upload.url, updatedBy: user.userId } }, { new: true })
+      .findByIdAndUpdate(req.params.id, { $set: { comprobanteUrl: upload.url, comprobantePublicId: upload.publicId, comprobanteResourceType: upload.resourceType, updatedBy: user.userId } }, { new: true })
       .populate("creadoPor", "name email")
       .populate("updatedBy", "name email")
       .lean();
