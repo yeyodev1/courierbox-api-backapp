@@ -6,12 +6,26 @@ function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
 }
 
+function buildDateMatch(desde?: unknown, hasta?: unknown) {
+  if (!desde && !hasta) return undefined;
+  const match: Record<string, Date> = { };
+  if (desde) match.$gte = new Date(String(desde));
+  if (hasta) {
+    const end = new Date(String(hasta));
+    end.setHours(23, 59, 59, 999);
+    match.$lte = end;
+  }
+  return match;
+}
+
 export async function listEnvios(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { estado, paqueteId, limit, offset } = req.query;
+    const { estado, paqueteId, desde, hasta, limit, offset } = req.query;
     const query: Record<string, any> = {};
     if (estado) query.estado = estado;
     if (paqueteId) query.paqueteId = paqueteId;
+    const dateMatch = buildDateMatch(desde, hasta);
+    if (dateMatch) query.createdAt = dateMatch;
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
     const skip = parseInt(offset as string) || 0;
@@ -195,20 +209,48 @@ export async function marcarEntregado(req: Request, res: Response, next: NextFun
 
 export async function resumenEnvios(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const [locales, interprovinciales] = await Promise.all([
+    const { desde, hasta } = _req.query;
+    const dateMatch = buildDateMatch(desde, hasta);
+    const match = dateMatch ? { createdAt: dateMatch } : {};
+
+    const [locales, interprovinciales, porEstado] = await Promise.all([
       models.enviosDomicilio.aggregate([
-        { $match: { modo: "local" } },
-        { $group: { _id: null, total: { $sum: 1 }, cobrados: { $sum: "$valorCobrado" }, novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } } } },
+        { $match: { ...match, modo: "local" } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            cobrados: { $sum: "$valorCobrado" },
+            costo: { $sum: { $add: [{ $ifNull: ["$trayectoUsa.costo", 0] }, { $ifNull: ["$trayectoLocal.costo", 0] }] } },
+            novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } },
+          },
+        },
       ]),
       models.enviosDomicilio.aggregate([
-        { $match: { modo: "interprovincial" } },
-        { $group: { _id: null, total: { $sum: 1 }, cobrados: { $sum: "$valorCobrado" }, pagados: { $sum: "$valorPagadoProveedor" }, novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } } } },
+        { $match: { ...match, modo: "interprovincial" } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            cobrados: { $sum: "$valorCobrado" },
+            pagados: { $sum: "$valorPagadoProveedor" },
+            costo: { $sum: { $add: [{ $ifNull: ["$trayectoUsa.costo", 0] }, { $ifNull: ["$trayectoLocal.costo", 0] }] } },
+            novedades: { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$novedad", ""] } }, 0] }, 1, 0] } },
+          },
+        },
+      ]),
+      models.enviosDomicilio.aggregate([
+        { $match: match },
+        { $group: { _id: "$estado", total: { $sum: 1 } } },
+        { $sort: { total: -1 } },
       ]),
     ]);
 
     res.status(200).json({
       locales: locales[0] || { total: 0, cobrados: 0 },
       interprovinciales: interprovinciales[0] || { total: 0, cobrados: 0, pagados: 0 },
+      porEstado,
+      saldo: (locales[0]?.cobrados || 0) + (interprovinciales[0]?.cobrados || 0) - ((locales[0]?.costo || 0) + (interprovinciales[0]?.costo || 0) + (interprovinciales[0]?.pagados || 0)),
     });
   } catch (error) {
     next(error);
@@ -258,6 +300,7 @@ export async function buscarClientes(req: Request, res: Response, next: NextFunc
       if (seen.has(key)) continue;
       seen.add(key);
       clientes.push({
+        clientId: String((o as any)._id),
         clientName: o.clientName,
         clientEmail: o.clientEmail,
         clientPhone: o.clientPhone,
