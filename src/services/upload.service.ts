@@ -37,12 +37,18 @@ if (isCloudinaryEnabled()) {
 export interface UploadResult {
   url: string;
   publicId: string;
+  resourceType: string;
+}
+
+export interface CloudinaryAssetRef {
+  publicId: string;
+  resourceType: string;
 }
 
 async function uploadBuffer(buffer: Buffer, folder: string): Promise<UploadResult> {
   if (!isCloudinaryEnabled()) {
     logger.warn("[upload] Cloudinary no configurado — simulando subida");
-    return { url: "", publicId: `sim-${Date.now()}` };
+    return { url: "", publicId: `sim-${Date.now()}`, resourceType: "" };
   }
 
   return new Promise((resolve, reject) => {
@@ -53,17 +59,49 @@ async function uploadBuffer(buffer: Buffer, folder: string): Promise<UploadResul
           const message = toErrorMessage(err);
           if (message.includes('cloud_name is disabled')) {
             logger.warn('[upload] Cloudinary disabled at runtime — simulating upload');
-            resolve({ url: '', publicId: `sim-${Date.now()}` });
+            resolve({ url: '', publicId: `sim-${Date.now()}`, resourceType: '' });
             return;
           }
           reject(new Error(message || "Upload failed"));
           return;
         }
-        resolve({ url: result.secure_url, publicId: result.public_id });
+        resolve({ url: result.secure_url, publicId: result.public_id, resourceType: result.resource_type || '' });
       }
     );
     stream.end(buffer);
   });
+}
+
+export function extractCloudinaryAssetRef(url: string): CloudinaryAssetRef | null {
+  if (!url) return null;
+
+  const match = url.match(/\/(image|raw|video)\/upload\/(?:v\d+\/)?(.+?)(?:\.[^./?#]+)?(?:[?#].*)?$/i);
+  if (!match) return null;
+
+  return {
+    resourceType: match[1].toLowerCase(),
+    publicId: match[2],
+  };
+}
+
+export async function deleteCloudinaryAsset(asset: CloudinaryAssetRef): Promise<void> {
+  if (!isCloudinaryEnabled()) {
+    logger.warn('[upload] Cloudinary no configurado — omitiendo borrado');
+    return;
+  }
+
+  const resourceTypes = asset.resourceType ? [asset.resourceType] : ['image', 'raw', 'video'];
+
+  for (const resourceType of resourceTypes) {
+    try {
+      const result = await cloudinary.uploader.destroy(asset.publicId, { resource_type: resourceType, invalidate: true });
+      if (result === 'ok' || (typeof result === 'object' && result && 'result' in result && (result as { result?: string }).result === 'ok')) {
+        return;
+      }
+    } catch (error) {
+      logger.warn('[upload] No se pudo borrar asset de Cloudinary', { publicId: asset.publicId, resourceType, error });
+    }
+  }
 }
 
 export async function uploadComprobante(buffer: Buffer): Promise<UploadResult> {
