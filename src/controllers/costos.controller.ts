@@ -7,6 +7,24 @@ function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
 }
 
+function toNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function calculateValorTotal(libras: unknown, valorPorLibra: unknown, fallback: unknown): number {
+  const librasNumber = toNumber(libras);
+  const valorPorLibraNumber = toNumber(valorPorLibra);
+  if (librasNumber > 0 && valorPorLibraNumber > 0) {
+    return Number((librasNumber * valorPorLibraNumber).toFixed(2));
+  }
+  return toNumber(fallback);
+}
+
+const gastoTotalExpression = {
+  $cond: [{ $gt: ["$valorTotal", 0] }, "$valorTotal", "$monto"],
+};
+
 async function resolveProveedor(proveedor?: string) {
   const input = canonicalProveedorNombre(proveedor || "");
   if (!input) return null;
@@ -124,10 +142,10 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       referencia: referencia || "",
       numeroFactura: numeroFactura || "",
       fechaFactura: fechaFactura ? new Date(fechaFactura) : undefined,
-      libras: Number(libras) || 0,
-      valorPorLibra: Number(valorPorLibra) || 0,
-      valorTotal: Number(valorTotal) || Number(monto) || 0,
-      valorPagado: Number(valorPagado) || 0,
+      libras: toNumber(libras),
+      valorPorLibra: toNumber(valorPorLibra),
+      valorTotal: calculateValorTotal(libras, valorPorLibra, toNumber(valorTotal) || toNumber(monto)),
+      valorPagado: toNumber(valorPagado),
       paqueteId: paqueteId || undefined,
       creadoPor: user.userId,
       updatedBy: user.userId,
@@ -160,6 +178,15 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
       const proveedorResolved = await resolveProveedor(updates.proveedor);
       updates.proveedor = proveedorResolved?.nombre || canonicalProveedorNombre(updates.proveedor);
       updates.proveedorId = proveedorResolved?._id;
+    }
+
+    if (updates.libras !== undefined) updates.libras = toNumber(updates.libras);
+    if (updates.valorPorLibra !== undefined) updates.valorPorLibra = toNumber(updates.valorPorLibra);
+    if (updates.valorPagado !== undefined) updates.valorPagado = toNumber(updates.valorPagado);
+    if (updates.monto !== undefined) updates.monto = toNumber(updates.monto);
+    if (updates.valorTotal !== undefined) updates.valorTotal = toNumber(updates.valorTotal);
+    if (updates.libras !== undefined && updates.valorPorLibra !== undefined) {
+      updates.valorTotal = calculateValorTotal(updates.libras, updates.valorPorLibra, toNumber(updates.valorTotal) || toNumber(updates.monto));
     }
 
     const gasto = await models.gastos
@@ -254,7 +281,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
         {
           $group: {
             _id: null,
-            total: { $sum: "$monto" },
+            total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
           },
@@ -265,7 +292,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
         {
           $group: {
             _id: "$tipo",
-            total: { $sum: "$monto" },
+            total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
           },
@@ -277,7 +304,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
         {
           $group: {
             _id: { $dateToString: { format: "%Y-%m", date: "$fecha" } },
-            total: { $sum: "$monto" },
+            total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
           },
@@ -289,7 +316,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
         {
           $group: {
             _id: "$categoria",
-            total: { $sum: "$monto" },
+            total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
           },
         },
@@ -301,7 +328,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
         {
           $group: {
             _id: "$proveedor",
-            total: { $sum: "$monto" },
+            total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
           },
         },

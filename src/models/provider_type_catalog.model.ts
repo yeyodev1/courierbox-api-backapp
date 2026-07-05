@@ -15,6 +15,4 @@ const providerTypeCatalogSchema = new Schema<IProviderTypeCatalog>(
   { timestamps: true }
 );
 
-providerTypeCatalogSchema.index({ key: 1 }, { unique: true });
-
 export const ProviderTypeCatalog = mongoose.model<IProviderTypeCatalog>("ProviderTypeCatalog", providerTypeCatalogSchema);
