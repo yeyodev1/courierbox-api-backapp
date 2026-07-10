@@ -36,6 +36,7 @@ const schema = z.object({
 
   // --- CourierBridge Hub ---
   GHL_WEBHOOK_INVOICE_URL: z.string().default(""),
+  GHL_WEBHOOK_COMPRA_URL: z.string().default(""),
   CONTIFICO_API_URL: z.string().default("https://api.contifico.com/v1"),
   CONTIFICO_API_KEY: z.string().default(""),
   CONTIFICO_TOKEN: z.string().default(""),

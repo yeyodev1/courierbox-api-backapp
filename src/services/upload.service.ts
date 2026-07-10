@@ -127,3 +127,7 @@ export async function uploadEnvioGuia(buffer: Buffer): Promise<UploadResult> {
 export async function uploadGastoFactura(buffer: Buffer): Promise<UploadResult> {
   return uploadBuffer(buffer, "courierbox/gastos/facturas");
 }
+
+export async function uploadGestionCompraImagen(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/gestiones_compra");
+}
