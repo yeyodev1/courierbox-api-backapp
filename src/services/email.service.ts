@@ -22,6 +22,7 @@ export async function sendCompraConfirmacion(params: {
   description: string;
   totalAmount: number;
   trackingUsa?: string;
+  viewUrl?: string;
 }): Promise<void> {
   const client = getClient();
   if (!client) return;
@@ -62,6 +63,7 @@ export async function sendCompraConfirmacion(params: {
               }
             </table>
             <p>Te mantendremos informado cuando llegue a nuestro warehouse y esté listo para envío a domicilio.</p>
+            ${params.viewUrl ? `<p style="text-align:center; margin: 24px 0;"><a href="${params.viewUrl}" style="background: #f57c00; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Ver mi pedido</a></p>` : ""}
             <p style="color: #999; font-size: 0.85rem;">Si tienes dudas, contacta a tu asesor.</p>
           </div>
         </div>

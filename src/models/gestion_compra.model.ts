@@ -2,6 +2,7 @@ import { Schema, model, Document, Types } from "mongoose";
 import crypto from "crypto";
 
 export type GestionCompraEstado = "borrador" | "activa" | "completado" | "cancelado";
+export type GestionCompraStage = "solicitada" | "revisando" | "comprada" | "en_transito" | "entregada";
 
 export interface IAuditEntryGC {
   timestamp: Date;
@@ -9,6 +10,12 @@ export interface IAuditEntryGC {
   userId: string;
   userName: string;
   notes?: string;
+}
+
+export interface IGestionCompraFoto {
+  url: string;
+  title?: string;
+  createdAt: Date;
 }
 
 export interface IGestionCompra extends Document {
@@ -28,6 +35,8 @@ export interface IGestionCompra extends Document {
   paginaCompra: string;
   fechaEntregaTentativa: Date;
   imagenCompraUrl?: string;
+  fotosRelacionadas: IGestionCompraFoto[];
+  stage: GestionCompraStage;
 
   // Lifecycle
   estado: GestionCompraEstado;
@@ -69,6 +78,24 @@ const GestionCompraSchema = new Schema<IGestionCompra>(
     paginaCompra: { type: String, required: true, trim: true },
     fechaEntregaTentativa: { type: Date, required: true },
     imagenCompraUrl: { type: String, trim: true },
+    fotosRelacionadas: {
+      type: [
+        new Schema<IGestionCompraFoto>(
+          {
+            url: { type: String, required: true, trim: true },
+            title: { type: String, trim: true },
+            createdAt: { type: Date, default: () => new Date() },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    stage: {
+      type: String,
+      enum: ["solicitada", "revisando", "comprada", "en_transito", "entregada"],
+      default: "solicitada",
+    },
 
     estado: {
       type: String,

@@ -1,6 +1,9 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { env } from "../config/env";
+
+const requestAuthStorage = new AsyncLocalStorage<{ user?: any }>();
 
 // Extend Request interface to include user
 declare global {
@@ -28,11 +31,17 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
   try {
     const decoded = jwt.verify(token, env.JWT_SECRET as string);
-    req.user = decoded;
-    next();
+    requestAuthStorage.run({ user: decoded }, () => {
+      req.user = decoded;
+      next();
+    });
   } catch (error) {
     res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
   }
+}
+
+export function getCurrentAuthUser() {
+  return requestAuthStorage.getStore()?.user;
 }
 
 export function requireRole(allowedRoles: string[]) {

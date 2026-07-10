@@ -30,7 +30,7 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
     const token = jwt.sign(
       { userId: user._id, email: user.email, role: user.role },
       env.JWT_SECRET,
-      { expiresIn: "12h" }
+      { expiresIn: "60d" }
     );
 
     res.status(200).json({
@@ -45,6 +45,35 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
     });
   } catch (error) {
     console.error("[auth] login error:", error);
+    next(error);
+  }
+}
+
+export async function me(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const userId = req.user?.userId ?? req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await models.users.findById(userId).lean();
+
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    res.status(200).json({
+      user: {
+        id: String(user._id),
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
+    });
+  } catch (error) {
     next(error);
   }
 }

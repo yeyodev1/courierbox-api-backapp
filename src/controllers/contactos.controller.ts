@@ -102,6 +102,10 @@ export async function getContacto(req: Request, res: Response, next: NextFunctio
     }
 
     const allAsesorIds = [...new Set(orders.map((o: any) => String(o.asesorId?._id || o.asesorId)))].filter(Boolean);
+    const asesores = await models.users
+      .find({ _id: { $in: allAsesorIds } })
+      .select('name email')
+      .lean();
 
     const contactInfo = {
       clientName: orders[0].clientName,
@@ -110,6 +114,7 @@ export async function getContacto(req: Request, res: Response, next: NextFunctio
       totalOrders: orders.length,
       firstOrderDate: orders[orders.length - 1].createdAt,
       lastOrderDate: orders[0].createdAt,
+      asesores,
     };
 
     res.status(200).json({ contacto: contactInfo, orders });

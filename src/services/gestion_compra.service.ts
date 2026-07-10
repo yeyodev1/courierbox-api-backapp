@@ -1,11 +1,19 @@
 import crypto from "crypto";
 import { models } from "../models/index.js";
 import { env } from "../config/env.js";
+import { getCurrentAuthUser } from "../middleware/auth.middleware.js";
 import { sendGestionCompraConfirmacion } from "./email.service.js";
 import { enviarWebhookCompraRegistrada } from "./ghl-webhook.service.js";
 import { calculateFee } from "./fee.service.js";
 
 export type GestionCompraEstado = "borrador" | "activa" | "completado" | "cancelado";
+export type GestionCompraStage = "solicitada" | "revisando" | "comprada" | "en_transito" | "entregada";
+
+export interface GestionCompraFotoInput {
+  url: string;
+  title?: string;
+  createdAt?: string | Date;
+}
 
 const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
 
@@ -21,6 +29,8 @@ export interface CreateGestionCompraInput {
   paginaCompra: string;
   fechaEntregaTentativa: string; // ISO string
   imagenCompraUrl?: string;
+  fotosRelacionadas?: GestionCompraFotoInput[];
+  stage?: GestionCompraStage;
   notas?: string;
   estado?: GestionCompraEstado;
   createdByUserId: string;
@@ -38,13 +48,61 @@ export interface UpdateGestionCompraInput {
   paginaCompra?: string;
   fechaEntregaTentativa?: string;
   imagenCompraUrl?: string;
+  fotosRelacionadas?: GestionCompraFotoInput[];
+  stage?: GestionCompraStage;
   notas?: string;
   estado?: GestionCompraEstado;
 }
 
+async function resolveAuthIdentity(input: CreateGestionCompraInput) {
+  const authUser = getCurrentAuthUser() as {
+    userId?: string;
+    id?: string;
+    _id?: string;
+    email?: string;
+    name?: string;
+    fullName?: string;
+  } | undefined;
+
+  const directUserId = String(input.createdByUserId ?? authUser?.userId ?? authUser?.id ?? authUser?._id ?? "").trim();
+  const directUserName = String(input.createdByUserName ?? authUser?.name ?? authUser?.fullName ?? authUser?.email ?? "").trim();
+
+  if (!directUserId && !directUserName) return null;
+
+  if (directUserId) {
+    const user = await models.users.findById(directUserId).select("name email").lean();
+    return {
+      userId: String(user?._id ?? directUserId),
+      userName: String(user?.name || user?.email || directUserName || "Usuario"),
+    };
+  }
+
+  if (directUserName) {
+    const user = await models.users.findOne({ email: directUserName.toLowerCase() }).select("_id name email").lean();
+    if (user) {
+      return {
+        userId: String(user._id),
+        userName: String(user.name || user.email || directUserName),
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function createGestionCompra(input: CreateGestionCompraInput) {
+  const auth = await resolveAuthIdentity(input);
+  if (!auth) {
+    throw new Error("Unauthorized: missing creator user");
+  }
+
+  const asesorId = String(input.asesorId ?? auth.userId ?? "").trim();
+  if (!asesorId) {
+    throw new Error("Unauthorized: missing asesor user");
+  }
+
   const gestion = await models.gestionesCompra.create({
-    asesorId: input.asesorId,
+    asesorId,
     contactoId: input.contactoId,
     valorTotal: input.valorTotal,
     valorReserva: input.valorReserva,
@@ -55,14 +113,20 @@ export async function createGestionCompra(input: CreateGestionCompraInput) {
     paginaCompra: input.paginaCompra,
     fechaEntregaTentativa: new Date(input.fechaEntregaTentativa),
     imagenCompraUrl: input.imagenCompraUrl,
+    fotosRelacionadas: input.fotosRelacionadas?.map((photo) => ({
+      url: photo.url,
+      title: photo.title,
+      createdAt: photo.createdAt ? new Date(photo.createdAt) : new Date(),
+    })) ?? (input.imagenCompraUrl ? [{ url: input.imagenCompraUrl, title: "Imagen principal", createdAt: new Date() }] : []),
+    stage: input.stage ?? "solicitada",
     notas: input.notas,
     estado: input.estado ?? "activa",
     auditLog: [
       {
         timestamp: new Date(),
         action: "creado",
-        userId: input.createdByUserId,
-        userName: input.createdByUserName,
+        userId: auth.userId,
+        userName: auth.userName,
         notes: "Gestión de compra creada",
       },
     ],
@@ -160,6 +224,8 @@ export async function updateGestion(
       ? new Date(input.fechaEntregaTentativa)
       : undefined,
     imagenCompraUrl: input.imagenCompraUrl,
+    fotosRelacionadas: input.fotosRelacionadas,
+    stage: input.stage,
     notas: input.notas,
     estado: input.estado,
   };

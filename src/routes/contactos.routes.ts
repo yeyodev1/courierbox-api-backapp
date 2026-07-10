@@ -5,7 +5,7 @@ import { listContactos, getContacto } from "../controllers/contactos.controller"
 export const contactosRouter = Router();
 
 contactosRouter.use(requireAuth);
-contactosRouter.use(requireRole(["admin"]));
+contactosRouter.use(requireRole(["admin", "asesor", "gerencia", "superadmin"]));
 
 contactosRouter.get("/", listContactos);
 contactosRouter.get("/detail", getContacto);
