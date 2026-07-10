@@ -33,7 +33,7 @@ asesoriaRouter.get("/orders/view/:token", getOrderByToken);
 
 // ─── AUTHENTICATED ───────────────────────────────
 asesoriaRouter.use(requireAuth);
-asesoriaRouter.use(requireRole(["admin", "asesor"]));
+asesoriaRouter.use(requireRole(["admin", "asesor", "gerencia", "superadmin"]));
 
 // Calculator (admin + asesor)
 asesoriaRouter.post("/calculate", postCalculate);

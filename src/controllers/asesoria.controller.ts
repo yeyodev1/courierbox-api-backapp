@@ -30,10 +30,35 @@ function isAdmin(req: Request): boolean {
   return getUser(req)?.role === "admin";
 }
 
+function isPrivileged(req: Request): boolean {
+  return ["admin", "gerencia", "superadmin"].includes(getUser(req)?.role ?? "");
+}
+
+function getObjectIdString(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value !== null && "_id" in value) {
+    return String((value as { _id?: unknown })._id ?? "");
+  }
+  return String(value);
+}
+
+function canAccessOrder(req: Request, order: any): boolean {
+  const user = getUser(req);
+  if (!user) return false;
+  if (isPrivileged(req)) return true;
+
+  const ownerId = getObjectIdString(order?.asesorId);
+  if (ownerId === user.userId) return true;
+
+  const sharedWith = Array.isArray(order?.sharedWith) ? order.sharedWith : [];
+  return sharedWith.some((entry: { asesorId?: unknown }) => getObjectIdString(entry?.asesorId) === user.userId);
+}
+
 function asesorFilter(req: Request): { asesorId?: string } {
   const user = getUser(req);
   if (!user) return {};
-  if (user.role === "admin") return {};
+  if (isPrivileged(req)) return {};
   return { asesorId: user.userId };
 }
 
@@ -186,7 +211,7 @@ export async function getOrder(req: Request, res: Response, next: NextFunction):
       res.status(404).json({ error: "Order not found" });
       return;
     }
-    if (!isAdmin(req) && order.asesorId.toString() !== getUser(req)?.userId) {
+    if (!canAccessOrder(req, order)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
@@ -306,7 +331,7 @@ export async function generateOrderPaymentLink(
       res.status(404).json({ error: "Order not found" });
       return;
     }
-    if (!isAdmin(req) && order.asesorId.toString() !== getUser(req)?.userId) {
+    if (!canAccessOrder(req, order)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
@@ -364,7 +389,7 @@ export async function uploadOrderTransfer(req: Request, res: Response, next: Nex
       res.status(404).json({ error: "Order not found" });
       return;
     }
-    if (!isAdmin(req) && order.asesorId.toString() !== getUser(req)?.userId) {
+    if (!canAccessOrder(req, order)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }

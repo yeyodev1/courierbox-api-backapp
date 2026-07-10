@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { models } from "../models/index";
+import { env } from "../config/env";
 import { calculateFee } from "./fee.service";
 import { sendCompraConfirmacion } from "./email.service";
 import type { IPurchaseOrder, ServiceType, IAuditEntry } from "../models/purchase_order.model";
@@ -182,6 +183,7 @@ export async function updateOrderStatus(
       description: order.description,
       totalAmount: order.totalAmount,
       trackingUsa: order.trackingUsa,
+      viewUrl: `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/seguir/${order.viewToken}`,
     });
   }
 

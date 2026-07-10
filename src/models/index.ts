@@ -12,6 +12,9 @@ import { Proveedor } from "./proveedor.model";
 import { ProviderTypeCatalog } from "./provider_type_catalog.model";
 import { CajaMovimiento } from "./caja_movimiento.model";
 import { ProduccionDiaria } from "./produccion_diaria.model";
+import { Contacto } from "./contacto.model";
+import { CuentaBancaria } from "./cuenta_bancaria.model";
+import { GestionCompra } from "./gestion_compra.model";
 
 export const models = {
   payments: Payment,
@@ -28,4 +31,7 @@ export const models = {
   providerTypeCatalog: ProviderTypeCatalog,
   cajaMovimientos: CajaMovimiento,
   produccionDiaria: ProduccionDiaria,
+  contactos: Contacto,
+  cuentasBancarias: CuentaBancaria,
+  gestionesCompra: GestionCompra,
 };
