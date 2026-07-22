@@ -3,7 +3,7 @@ import * as GestionCompraService from "../services/gestion_compra.service.js";
 import { uploadGestionCompraImagen } from "../services/upload.service.js";
 import { models } from "../models/index.js";
 
-const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
+const ADMIN_ROLES = ["admin", "superadmin", "gerencia", "bodega"];
 
 async function resolveUserIdentity(user: any) {
   const userId = String(user?.userId ?? user?.id ?? user?._id ?? "").trim();
@@ -258,6 +258,39 @@ export async function comisionPreview(req: Request, res: Response, next: NextFun
 
     const result = await GestionCompraService.calcularComisionPreview(valorTotal, feeConfigId);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/v1/gestiones-compra/:id/recepcion-bodega
+export async function recepcionBodega(req: Request, res: Response, next: NextFunction) {
+  try {
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const fotos = Array.isArray(req.body.fotos)
+      ? req.body.fotos
+          .map((f: any) => (typeof f === "string" ? { url: f } : { url: f?.url, title: f?.title }))
+          .filter((f: any) => f.url)
+      : [];
+
+    const gestion = await GestionCompraService.registrarRecepcionBodega(
+      String(req.params.id),
+      { fotos, notas: req.body.notas, enviarCorreo: req.body.enviarCorreo },
+      auth.userId,
+      auth.userName
+    );
+
+    if (!gestion) {
+      res.status(404).json({ error: "Gestión no encontrada" });
+      return;
+    }
+
+    res.json({ gestion });
   } catch (err) {
     next(err);
   }

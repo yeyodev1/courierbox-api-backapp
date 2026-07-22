@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { models } from "../models/index.js";
 import { env } from "../config/env.js";
 import { getCurrentAuthUser } from "../middleware/auth.middleware.js";
-import { sendGestionCompraConfirmacion } from "./email.service.js";
+import { sendGestionCompraConfirmacion, sendRecepcionBodegaCliente } from "./email.service.js";
 import { enviarWebhookCompraRegistrada } from "./ghl-webhook.service.js";
 import { calculateFee } from "./fee.service.js";
 
@@ -15,7 +15,7 @@ export interface GestionCompraFotoInput {
   createdAt?: string | Date;
 }
 
-const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
+const ADMIN_ROLES = ["admin", "superadmin", "gerencia", "bodega"];
 
 export interface CreateGestionCompraInput {
   asesorId: string;
@@ -404,6 +404,69 @@ export async function sendNotificacionCliente(gestionId: string): Promise<void> 
       },
     },
   });
+}
+
+export async function registrarRecepcionBodega(
+  id: string,
+  input: { fotos?: GestionCompraFotoInput[]; notas?: string; enviarCorreo?: boolean },
+  userId: string,
+  userName: string
+) {
+  const nuevasFotos = (input.fotos ?? []).map((photo) => ({
+    url: photo.url,
+    title: photo.title ?? "Recibido en bodega",
+    createdAt: photo.createdAt ? new Date(photo.createdAt) : new Date(),
+  }));
+
+  const set: Record<string, any> = { stage: "comprada" };
+  if (nuevasFotos[0]?.url) set.imagenCompraUrl = nuevasFotos[0].url;
+
+  const updated = await models.gestionesCompra
+    .findByIdAndUpdate(
+      id,
+      {
+        $set: set,
+        ...(nuevasFotos.length ? { $push: { fotosRelacionadas: { $each: nuevasFotos } } } : {}),
+      },
+      { new: true }
+    )
+    .populate<{ contactoId: { nombre: string; email?: string } }>("contactoId", "nombre email telefono")
+    .populate<{ asesorId: { name: string } }>("asesorId", "name email")
+    .lean();
+
+  if (!updated) return null;
+
+  // audit
+  await models.gestionesCompra.findByIdAndUpdate(id, {
+    $push: {
+      auditLog: {
+        timestamp: new Date(),
+        action: "recepcion_bodega",
+        userId,
+        userName,
+        notes: input.notas || "Producto recibido en bodega",
+      },
+    },
+  });
+
+  if (input.enviarCorreo !== false) {
+    const contacto = updated.contactoId as any;
+    const asesor = updated.asesorId as any;
+    if (contacto?.email) {
+      const viewUrl = `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`;
+      const fotos = (updated.fotosRelacionadas ?? []).map((f: any) => f.url).filter(Boolean);
+      await sendRecepcionBodegaCliente({
+        to: contacto.email,
+        clientName: contacto.nombre,
+        fotos: fotos.length ? fotos : nuevasFotos.map((f) => f.url).filter(Boolean),
+        viewUrl,
+        asesorNombre: asesor?.name ?? "Courier Box",
+        notas: input.notas,
+      });
+    }
+  }
+
+  return updated;
 }
 
 export async function calcularComisionPreview(

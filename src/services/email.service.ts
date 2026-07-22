@@ -162,6 +162,225 @@ export async function sendGestionCompraConfirmacion(params: {
   }
 }
 
+export async function sendRecepcionBodegaCliente(params: {
+  to: string;
+  clientName: string;
+  fotos: string[];
+  viewUrl: string;
+  asesorNombre?: string;
+  notas?: string;
+}): Promise<void> {
+  const client = getClient();
+  if (!client) return;
+
+  const fotosHtml = params.fotos.length
+    ? `<div style="margin: 16px 0; display:flex; flex-wrap:wrap; gap:8px; justify-content:center;">
+         ${params.fotos
+           .map(
+             (url) =>
+               `<img src="${url}" alt="Producto en bodega" style="width: 46%; border-radius: 8px; border: 1px solid #333;" />`
+           )
+           .join("")}
+       </div>`
+    : "";
+
+  try {
+    await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: "Tu producto llegó a nuestra bodega 📦",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: #f57c00; padding: 24px; border-radius: 12px 12px 0 0;">
+            <h1 style="color: #fff; margin: 0; font-size: 1.5rem;">Producto recibido en bodega</h1>
+          </div>
+          <div style="background: #1a1a1a; color: #e0e0e0; padding: 24px; border-radius: 0 0 12px 12px;">
+            <p>Hola <strong>${params.clientName}</strong>,</p>
+            <p>¡Buenas noticias! Tu producto llegó a nuestra bodega y está siendo procesado para su envío.</p>
+            ${fotosHtml}
+            ${params.notas ? `<p style="color:#aaa;">${params.notas}</p>` : ""}
+            <div style="text-align: center; margin: 24px 0;">
+              <a href="${params.viewUrl}" style="background: #f57c00; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+                Ver estado de mi pedido
+              </a>
+            </div>
+            <p style="color: #666; font-size: 0.8rem; margin-top: 24px;">Courier Box Logistics · courierboxlogistics.com</p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[email] recepcion bodega sent to ${params.to}`);
+  } catch (err) {
+    console.error("[email] failed to send recepcion bodega:", err);
+  }
+}
+
+export async function sendEnvioEnCaminoCliente(params: {
+  to: string;
+  clienteNombre: string;
+  direccion: string;
+  modo: "local" | "interprovincial";
+  valorCobrado?: number;
+  proveedor?: string;
+  guiaUrl?: string;
+  ciudadDestino?: string;
+}): Promise<void> {
+  const client = getClient();
+  if (!client) return;
+
+  const esInter = params.modo === "interprovincial";
+  const titulo = esInter ? "Tu pedido fue despachado 🚚" : "Tu guía de envío fue generada 🛵";
+  const intro = esInter
+    ? "Tu pedido fue despachado con nuestro proveedor de mensajería y está en camino."
+    : "Generamos la guía de tu envío y tu pedido está en camino a la dirección indicada.";
+
+  const guiaHtml = params.guiaUrl
+    ? `<div style="margin: 16px 0; text-align: center;">
+         <a href="${params.guiaUrl}" style="color:#f57c00;">Ver guía de envío</a>
+       </div>`
+    : "";
+
+  try {
+    await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: titulo,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: #f57c00; padding: 24px; border-radius: 12px 12px 0 0;">
+            <h1 style="color: #fff; margin: 0; font-size: 1.5rem;">${esInter ? "Pedido despachado" : "Envío en camino"}</h1>
+          </div>
+          <div style="background: #1a1a1a; color: #e0e0e0; padding: 24px; border-radius: 0 0 12px 12px;">
+            <p>Hola <strong>${params.clienteNombre}</strong>,</p>
+            <p>${intro}</p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+              <tr>
+                <td style="padding: 8px; color: #999; width: 140px;">Dirección</td>
+                <td style="padding: 8px;"><strong>${params.direccion}</strong></td>
+              </tr>
+              ${
+                params.ciudadDestino
+                  ? `<tr style="background:#252525;"><td style="padding: 8px; color: #999;">Ciudad</td><td style="padding: 8px;"><strong>${params.ciudadDestino}</strong></td></tr>`
+                  : ""
+              }
+              ${
+                esInter && params.proveedor
+                  ? `<tr><td style="padding: 8px; color: #999;">Transportadora</td><td style="padding: 8px;"><strong>${params.proveedor}</strong></td></tr>`
+                  : ""
+              }
+              ${
+                !esInter && typeof params.valorCobrado === "number"
+                  ? `<tr><td style="padding: 8px; color: #999;">Valor de envío</td><td style="padding: 8px;"><strong>$${params.valorCobrado.toFixed(2)}</strong></td></tr>`
+                  : ""
+              }
+            </table>
+            ${guiaHtml}
+            <p>Te avisaremos cuando sea entregado.</p>
+            <p style="color: #666; font-size: 0.8rem; margin-top: 24px;">Courier Box Logistics · courierboxlogistics.com</p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[email] envio en camino sent to ${params.to}`);
+  } catch (err) {
+    console.error("[email] failed to send envio en camino:", err);
+  }
+}
+
+export async function sendEntregaConfirmacion(params: {
+  to: string;
+  clienteNombre: string;
+  direccion: string;
+  fotoEntregaUrl?: string;
+  firmaUrl?: string;
+  motorizadoNombre?: string;
+  novedad?: string;
+  recibidoPor?: string;
+  recibidoPorCedula?: string;
+}): Promise<void> {
+  const client = getClient();
+  if (!client) return;
+
+  const fecha = new Date().toLocaleString("es-EC", {
+    dateStyle: "long",
+    timeStyle: "short",
+  });
+
+  const fotoHtml = params.fotoEntregaUrl
+    ? `<div style="margin: 16px 0; text-align: center;">
+         <p style="color:#999; font-size:0.8rem; margin:0 0 6px;">Foto de la entrega</p>
+         <img src="${params.fotoEntregaUrl}" alt="Entrega" style="max-width: 100%; border-radius: 8px; border: 1px solid #333;" />
+       </div>`
+    : "";
+
+  const firmaHtml = params.firmaUrl
+    ? `<div style="margin: 16px 0; text-align: center;">
+         <p style="color:#999; font-size:0.8rem; margin:0 0 6px;">Firma de recepción</p>
+         <img src="${params.firmaUrl}" alt="Firma" style="max-width: 260px; background:#fff; border-radius: 8px; border: 1px solid #333; padding: 4px;" />
+       </div>`
+    : "";
+
+  try {
+    await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: "Tu pedido fue entregado ✅",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: #f57c00; padding: 24px; border-radius: 12px 12px 0 0;">
+            <h1 style="color: #fff; margin: 0; font-size: 1.5rem;">Entrega completada</h1>
+          </div>
+          <div style="background: #1a1a1a; color: #e0e0e0; padding: 24px; border-radius: 0 0 12px 12px;">
+            <p>Hola <strong>${params.clienteNombre}</strong>,</p>
+            <p>Tu pedido fue entregado exitosamente. Aquí está el respaldo de la entrega:</p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+              <tr>
+                <td style="padding: 8px; color: #999; width: 140px;">Dirección</td>
+                <td style="padding: 8px;"><strong>${params.direccion}</strong></td>
+              </tr>
+              <tr style="background: #252525;">
+                <td style="padding: 8px; color: #999;">Fecha y hora</td>
+                <td style="padding: 8px;"><strong>${fecha}</strong></td>
+              </tr>
+              ${
+                params.motorizadoNombre
+                  ? `<tr>
+                       <td style="padding: 8px; color: #999;">Entregado por</td>
+                       <td style="padding: 8px;"><strong>${params.motorizadoNombre}</strong></td>
+                     </tr>`
+                  : ""
+              }
+              ${
+                params.recibidoPor
+                  ? `<tr>
+                       <td style="padding: 8px; color: #999;">Recibido por</td>
+                       <td style="padding: 8px;"><strong>${params.recibidoPor}${params.recibidoPorCedula ? ` · CI ${params.recibidoPorCedula}` : ""}</strong></td>
+                     </tr>`
+                  : ""
+              }
+              ${
+                params.novedad
+                  ? `<tr style="background: #252525;">
+                       <td style="padding: 8px; color: #999;">Observaciones</td>
+                       <td style="padding: 8px;"><strong>${params.novedad}</strong></td>
+                     </tr>`
+                  : ""
+              }
+            </table>
+            ${fotoHtml}
+            ${firmaHtml}
+            <p style="color: #999; font-size: 0.85rem;">Gracias por confiar en Courier Box Logistics.</p>
+            <p style="color: #666; font-size: 0.8rem; margin-top: 24px;">Courier Box Logistics · courierboxlogistics.com</p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`[email] entrega confirmation sent to ${params.to}`);
+  } catch (err) {
+    console.error("[email] failed to send entrega confirmation:", err);
+  }
+}
+
 export async function sendCredenciales(params: {
   to: string;
   name: string;

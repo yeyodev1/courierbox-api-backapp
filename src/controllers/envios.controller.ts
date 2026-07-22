@@ -1,9 +1,14 @@
 import type { Request, Response, NextFunction } from "express";
 import { models } from "../models/index";
 import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service";
+import { sendEntregaConfirmacion, sendEnvioEnCaminoCliente } from "../services/email.service";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
+}
+
+function isMotorizado(user?: { role: string }) {
+  return user?.role === "motorizado";
 }
 
 function buildDateMatch(desde?: unknown, hasta?: unknown) {
@@ -20,10 +25,19 @@ function buildDateMatch(desde?: unknown, hasta?: unknown) {
 
 export async function listEnvios(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { estado, paqueteId, desde, hasta, limit, offset } = req.query;
+    const user = getUser(req);
+    const { estado, paqueteId, asignadoA, desde, hasta, limit, offset } = req.query;
     const query: Record<string, any> = {};
     if (estado) query.estado = estado;
     if (paqueteId) query.paqueteId = paqueteId;
+
+    // Motorizados only ever see the deliveries assigned to them.
+    if (isMotorizado(user)) {
+      query.asignadoA = user?.userId;
+    } else if (asignadoA) {
+      query.asignadoA = asignadoA;
+    }
+
     const dateMatch = buildDateMatch(desde, hasta);
     if (dateMatch) query.createdAt = dateMatch;
 
@@ -35,6 +49,7 @@ export async function listEnvios(req: Request, res: Response, next: NextFunction
         .find(query)
         .populate("paqueteId", "wr sh trackingOriginal contenido")
         .populate("creadoPor", "name email")
+        .populate("asignadoA", "name email")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(take)
@@ -50,16 +65,25 @@ export async function listEnvios(req: Request, res: Response, next: NextFunction
 
 export async function getEnvio(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
     const envio = await models.enviosDomicilio
       .findById(req.params.id)
       .populate("paqueteId", "wr sh trackingOriginal contenido")
       .populate("creadoPor", "name email")
+      .populate("asignadoA", "name email")
       .lean();
 
     if (!envio) {
       res.status(404).json({ error: "Envio not found" });
       return;
     }
+
+    // Motorizados can only open their own deliveries.
+    if (isMotorizado(user) && String((envio as any).asignadoA?._id ?? (envio as any).asignadoA ?? "") !== String(user?.userId)) {
+      res.status(403).json({ error: "Sin acceso a este envío" });
+      return;
+    }
+
     res.status(200).json({ envio });
   } catch (error) {
     next(error);
@@ -80,6 +104,8 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       clienteNombre,
       clienteDireccion,
       clienteTelefono,
+      clienteEmail,
+      asignadoA,
       numeroInvoice,
       ciudadDestino,
       proveedorUtilizado,
@@ -90,29 +116,47 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       notas,
     } = req.body;
 
-    if (!paqueteId || !clienteNombre || !clienteDireccion) {
-      res.status(400).json({ error: "paqueteId, clienteNombre, clienteDireccion are required" });
+    // paqueteId is now optional — a local delivery can be registered on its own.
+    if (!clienteNombre || !clienteDireccion) {
+      res.status(400).json({ error: "clienteNombre and clienteDireccion are required" });
       return;
     }
 
+    // Resolve assigned motorizado name (if any) for quick display.
+    let asignadoNombre = "";
+    let estado: "pendiente" | "asignado" = "pendiente";
+    if (asignadoA) {
+      const motorizado = await models.users.findById(asignadoA).select("name email role").lean();
+      if (motorizado) {
+        asignadoNombre = String(motorizado.name || motorizado.email || "");
+        estado = "asignado";
+      }
+    }
+
     const envio = await models.enviosDomicilio.create({
-      paqueteId,
+      ...(paqueteId ? { paqueteId } : {}),
       modo: modo === "interprovincial" ? "interprovincial" : "local",
       clienteNombre,
       clienteDireccion,
       clienteTelefono: clienteTelefono || "",
+      clienteEmail: clienteEmail || "",
+      ...(asignadoA ? { asignadoA } : {}),
+      asignadoNombre,
+      estado,
       numeroInvoice: numeroInvoice || "",
       ciudadDestino: ciudadDestino || "",
       proveedorUtilizado: proveedorUtilizado || "",
       valorCobrado: Number(valorCobrado) || 0,
       valorPagadoProveedor: Number(valorPagadoProveedor) || 0,
       trayectoUsa: {
+        proveedorId: trayectoUsa?.proveedorId || undefined,
         proveedorNombre: trayectoUsa?.proveedorNombre || "",
         tracking: trayectoUsa?.tracking || "",
         costo: trayectoUsa?.costo || 0,
         notas: trayectoUsa?.notas || "",
       },
       trayectoLocal: {
+        proveedorId: trayectoLocal?.proveedorId || undefined,
         proveedorNombre: trayectoLocal?.proveedorNombre || "",
         tracking: trayectoLocal?.tracking || "",
         costo: trayectoLocal?.costo || 0,
@@ -121,6 +165,21 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       notas: notas || "",
       creadoPor: user.userId,
     });
+
+    // Notify the client that a guide was generated and the order is on its way.
+    if (clienteEmail) {
+      const esInter = envio.modo === "interprovincial";
+      sendEnvioEnCaminoCliente({
+        to: clienteEmail,
+        clienteNombre,
+        direccion: clienteDireccion,
+        modo: envio.modo,
+        valorCobrado: Number(valorCobrado) || 0,
+        proveedor: esInter ? (proveedorUtilizado || trayectoLocal?.proveedorNombre || "") : "",
+        guiaUrl: envio.guiaUrl || "",
+        ciudadDestino: ciudadDestino || "",
+      }).catch((err) => console.error("[envios] en-camino email error:", err));
+    }
 
     res.status(201).json({ envio });
   } catch (error) {
@@ -151,10 +210,24 @@ export async function updateEnvio(req: Request, res: Response, next: NextFunctio
 
 export async function uploadEnvioArchivo(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
     const { tipo } = req.body;
     if (!req.file) {
       res.status(400).json({ error: "file is required" });
       return;
+    }
+
+    // Motorizados can only upload evidence to their own deliveries.
+    if (isMotorizado(user)) {
+      const current = await models.enviosDomicilio.findById(req.params.id).select("asignadoA").lean();
+      if (!current) {
+        res.status(404).json({ error: "Envio not found" });
+        return;
+      }
+      if (String((current as any).asignadoA ?? "") !== String(user?.userId)) {
+        res.status(403).json({ error: "Sin acceso a este envío" });
+        return;
+      }
     }
 
     const upload = tipo === "guia" ? await uploadEnvioGuia(req.file.buffer) : await uploadEnvioEvidencia(req.file.buffer);
@@ -179,21 +252,97 @@ export async function uploadEnvioArchivo(req: Request, res: Response, next: Next
 export async function marcarEntregado(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const user = getUser(req);
+
+    // A motorizado can only deliver their own assignments.
+    if (isMotorizado(user)) {
+      const current = await models.enviosDomicilio.findById(req.params.id).select("asignadoA").lean();
+      if (!current) {
+        res.status(404).json({ error: "Envio not found" });
+        return;
+      }
+      if (String((current as any).asignadoA ?? "") !== String(user?.userId)) {
+        res.status(403).json({ error: "Sin acceso a este envío" });
+        return;
+      }
+    }
+
+    const set: Record<string, any> = {
+      estado: "entregado",
+      entregadoEn: new Date(),
+      entregadoPor: user?.userId,
+      novedad: req.body.novedad || "",
+    };
+    if (req.body.fotoEntregaUrl) set.fotoEntregaUrl = req.body.fotoEntregaUrl;
+    if (req.body.firmaUrl) set.firmaUrl = req.body.firmaUrl;
+    if (req.body.evidenciaUrl) set.evidenciaUrl = req.body.evidenciaUrl;
+    if (req.body.recibidoPorNombre !== undefined) set.recibidoPorNombre = req.body.recibidoPorNombre || "";
+    if (req.body.recibidoPorApellido !== undefined) set.recibidoPorApellido = req.body.recibidoPorApellido || "";
+    if (req.body.recibidoPorCedula !== undefined) set.recibidoPorCedula = req.body.recibidoPorCedula || "";
+
+    const envio = await models.enviosDomicilio
+      .findByIdAndUpdate(req.params.id, { $set: set }, { new: true })
+      .populate("paqueteId", "wr sh trackingOriginal contenido")
+      .populate("asignadoA", "name email")
+      .lean();
+
+    if (!envio) {
+      res.status(404).json({ error: "Envio not found" });
+      return;
+    }
+
+    // Notify the client (fire-and-forget) that their delivery was completed.
+    if ((envio as any).clienteEmail) {
+      sendEntregaConfirmacion({
+        to: (envio as any).clienteEmail,
+        clienteNombre: (envio as any).clienteNombre,
+        direccion: (envio as any).clienteDireccion,
+        fotoEntregaUrl: (envio as any).fotoEntregaUrl || "",
+        firmaUrl: (envio as any).firmaUrl || "",
+        motorizadoNombre: (envio as any).asignadoNombre || "",
+        novedad: (envio as any).novedad || "",
+        recibidoPor: [
+          (envio as any).recibidoPorNombre,
+          (envio as any).recibidoPorApellido,
+        ].filter(Boolean).join(" "),
+        recibidoPorCedula: (envio as any).recibidoPorCedula || "",
+      }).catch((err) => console.error("[envios] entrega email error:", err));
+    }
+
+    res.status(200).json({ envio });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// PATCH /api/v1/envios/:id/asignar — assign a motorizado to a delivery
+export async function asignarMotorizado(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { asignadoA } = req.body;
+    if (!asignadoA) {
+      res.status(400).json({ error: "asignadoA is required" });
+      return;
+    }
+
+    const motorizado = await models.users.findById(asignadoA).select("name email role").lean();
+    if (!motorizado) {
+      res.status(404).json({ error: "Motorizado not found" });
+      return;
+    }
+
     const envio = await models.enviosDomicilio
       .findByIdAndUpdate(
         req.params.id,
         {
           $set: {
-            estado: "entregado",
-            entregadoEn: new Date(),
-            entregadoPor: user?.userId,
-            evidenciaUrl: req.body.evidenciaUrl || "",
-            novedad: req.body.novedad || "",
+            asignadoA,
+            asignadoNombre: String(motorizado.name || motorizado.email || ""),
+            estado: "asignado",
           },
         },
         { new: true }
       )
       .populate("paqueteId", "wr sh trackingOriginal contenido")
+      .populate("asignadoA", "name email")
       .lean();
 
     if (!envio) {
@@ -202,6 +351,20 @@ export async function marcarEntregado(req: Request, res: Response, next: NextFun
     }
 
     res.status(200).json({ envio });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// GET /api/v1/envios/motorizados — list users that can receive deliveries
+export async function listMotorizados(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const motorizados = await models.users
+      .find({ role: "motorizado" })
+      .select("name email")
+      .sort({ name: 1 })
+      .lean();
+    res.status(200).json({ motorizados });
   } catch (error) {
     next(error);
   }
