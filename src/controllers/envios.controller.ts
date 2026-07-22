@@ -101,6 +101,7 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
 
     const {
       paqueteId,
+      gestionCompraId,
       modo,
       clienteNombre,
       clienteDireccion,
@@ -136,6 +137,7 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
 
     const envio = await models.enviosDomicilio.create({
       ...(paqueteId ? { paqueteId } : {}),
+      ...(gestionCompraId ? { gestionCompraId } : {}),
       modo: modo === "interprovincial" ? "interprovincial" : "local",
       clienteNombre,
       clienteDireccion,
@@ -166,6 +168,26 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       notas: notas || "",
       creadoPor: user.userId,
     });
+
+    // If this delivery comes from a purchase, advance that purchase to "en_transito".
+    if (gestionCompraId) {
+      try {
+        await models.gestionesCompra.findByIdAndUpdate(gestionCompraId, {
+          $set: { stage: "en_transito" },
+          $push: {
+            auditLog: {
+              timestamp: new Date(),
+              action: "envio_generado",
+              userId: user.userId,
+              userName: user.email || "Bodega",
+              notes: `Envío generado y asignado (${asignadoNombre || "sin motorizado"})`,
+            },
+          },
+        });
+      } catch (err) {
+        console.error("[envios] no se pudo actualizar stage de gestión:", err);
+      }
+    }
 
     // Notify the client that a guide was generated and the order is on its way.
     if (clienteEmail) {
