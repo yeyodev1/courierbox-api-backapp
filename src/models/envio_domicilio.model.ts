@@ -13,6 +13,7 @@ export interface ITrayectoPago {
 
 export interface IEnvioDomicilio extends Document {
   paqueteId?: mongoose.Types.ObjectId;
+  gestionCompraId?: mongoose.Types.ObjectId;
   modo: "local" | "interprovincial";
   clienteNombre: string;
   clienteDireccion: string;
@@ -64,6 +65,10 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     paqueteId: {
       type: Schema.Types.ObjectId,
       ref: "Paquete",
+    },
+    gestionCompraId: {
+      type: Schema.Types.ObjectId,
+      ref: "GestionCompra",
     },
     modo: { type: String, enum: ["local", "interprovincial"], default: "local" },
     clienteNombre: { type: String, required: true },
