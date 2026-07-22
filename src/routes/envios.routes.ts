@@ -14,6 +14,8 @@ import {
   marcarEntregado,
   asignarMotorizado,
   listMotorizados,
+  createMotorizado,
+  deleteMotorizado,
   resumenEnvios,
 } from "../controllers/envios.controller";
 
@@ -29,6 +31,8 @@ router.use(requireAuth);
 router.get("/", requireRole(STAFF_AND_MOTORIZADO), listEnvios);
 router.get("/resumen", requireRole(STAFF), resumenEnvios);
 router.get("/motorizados", requireRole(STAFF), listMotorizados);
+router.post("/motorizados", requireRole(STAFF), createMotorizado);
+router.delete("/motorizados/:id", requireRole(STAFF), deleteMotorizado);
 router.get("/buscar-paquetes", requireRole(STAFF), buscarPaquetes);
 router.get("/buscar-clientes", requireRole(STAFF), buscarClientes);
 router.get("/:id", requireRole(STAFF_AND_MOTORIZADO), getEnvio);

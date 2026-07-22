@@ -1,7 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
+import bcrypt from "bcryptjs";
 import { models } from "../models/index";
 import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service";
-import { sendEntregaConfirmacion, sendEnvioEnCaminoCliente } from "../services/email.service";
+import { sendEntregaConfirmacion, sendEnvioEnCaminoCliente, sendCredenciales } from "../services/email.service";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -278,6 +279,7 @@ export async function marcarEntregado(req: Request, res: Response, next: NextFun
     if (req.body.recibidoPorNombre !== undefined) set.recibidoPorNombre = req.body.recibidoPorNombre || "";
     if (req.body.recibidoPorApellido !== undefined) set.recibidoPorApellido = req.body.recibidoPorApellido || "";
     if (req.body.recibidoPorCedula !== undefined) set.recibidoPorCedula = req.body.recibidoPorCedula || "";
+    if (req.body.recibidoPorContacto !== undefined) set.recibidoPorContacto = req.body.recibidoPorContacto || "";
 
     const envio = await models.enviosDomicilio
       .findByIdAndUpdate(req.params.id, { $set: set }, { new: true })
@@ -305,6 +307,7 @@ export async function marcarEntregado(req: Request, res: Response, next: NextFun
           (envio as any).recibidoPorApellido,
         ].filter(Boolean).join(" "),
         recibidoPorCedula: (envio as any).recibidoPorCedula || "",
+        recibidoPorContacto: (envio as any).recibidoPorContacto || "",
       }).catch((err) => console.error("[envios] entrega email error:", err));
     }
 
@@ -361,10 +364,74 @@ export async function listMotorizados(_req: Request, res: Response, next: NextFu
   try {
     const motorizados = await models.users
       .find({ role: "motorizado" })
-      .select("name email")
+      .select("name email createdAt")
       .sort({ name: 1 })
       .lean();
     res.status(200).json({ motorizados });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// POST /api/v1/envios/motorizados — create a motorizado user (bodega/staff)
+export async function createMotorizado(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { name, email, password, sendEmail } = req.body;
+    if (!name || !email) {
+      res.status(400).json({ error: "name and email are required" });
+      return;
+    }
+
+    const existing = await models.users.findOne({ email: String(email).toLowerCase() });
+    if (existing) {
+      res.status(400).json({ error: "El correo ya está registrado" });
+      return;
+    }
+
+    const rawPassword = String(password || Math.random().toString(36).slice(-10) + "A1");
+    const passwordHash = await bcrypt.hash(rawPassword, await bcrypt.genSalt(10));
+
+    const motorizado = await models.users.create({
+      name,
+      email: String(email).toLowerCase(),
+      passwordHash,
+      role: "motorizado",
+    });
+
+    if (sendEmail) {
+      await sendCredenciales({
+        to: motorizado.email,
+        name: motorizado.name,
+        email: motorizado.email,
+        password: rawPassword,
+        role: "motorizado",
+        loginUrl: req.body.loginUrl || "https://courierboxlogistics.com/login",
+      });
+    }
+
+    res.status(201).json({
+      motorizado: { _id: motorizado._id, name: motorizado.name, email: motorizado.email },
+      password: sendEmail ? undefined : rawPassword,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// DELETE /api/v1/envios/motorizados/:id — remove a motorizado user (bodega/staff)
+export async function deleteMotorizado(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = await models.users.findById(req.params.id).select("role").lean();
+    if (!user) {
+      res.status(404).json({ error: "Usuario no encontrado" });
+      return;
+    }
+    if ((user as any).role !== "motorizado") {
+      res.status(400).json({ error: "Solo se pueden eliminar usuarios motorizados desde aquí" });
+      return;
+    }
+    await models.users.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "Motorizado eliminado" });
   } catch (error) {
     next(error);
   }

@@ -408,7 +408,7 @@ export async function sendNotificacionCliente(gestionId: string): Promise<void> 
 
 export async function registrarRecepcionBodega(
   id: string,
-  input: { fotos?: GestionCompraFotoInput[]; notas?: string; enviarCorreo?: boolean },
+  input: { fotos?: GestionCompraFotoInput[]; notas?: string; enviarCorreo?: boolean; entregaEstimada?: string },
   userId: string,
   userName: string
 ) {
@@ -462,6 +462,7 @@ export async function registrarRecepcionBodega(
         viewUrl,
         asesorNombre: asesor?.name ?? "Courier Box",
         notas: input.notas,
+        entregaEstimada: input.entregaEstimada,
       });
     }
   }

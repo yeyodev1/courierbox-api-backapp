@@ -13,7 +13,7 @@ export const proveedoresRouter = Router();
 const providerTypesRouter = Router();
 
 proveedoresRouter.use(requireAuth);
-proveedoresRouter.use(requireRole(["admin", "gerencia", "superadmin"]));
+proveedoresRouter.use(requireRole(["admin", "gerencia", "superadmin", "bodega"]));
 
 providerTypesRouter.get("/", listProviderTypes);
 providerTypesRouter.post("/", addProviderType);

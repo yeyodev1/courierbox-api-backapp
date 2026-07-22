@@ -280,7 +280,7 @@ export async function recepcionBodega(req: Request, res: Response, next: NextFun
 
     const gestion = await GestionCompraService.registrarRecepcionBodega(
       String(req.params.id),
-      { fotos, notas: req.body.notas, enviarCorreo: req.body.enviarCorreo },
+      { fotos, notas: req.body.notas, enviarCorreo: req.body.enviarCorreo, entregaEstimada: req.body.entregaEstimada },
       auth.userId,
       auth.userName
     );

@@ -169,6 +169,7 @@ export async function sendRecepcionBodegaCliente(params: {
   viewUrl: string;
   asesorNombre?: string;
   notas?: string;
+  entregaEstimada?: string;
 }): Promise<void> {
   const client = getClient();
   if (!client) return;
@@ -197,6 +198,14 @@ export async function sendRecepcionBodegaCliente(params: {
           <div style="background: #1a1a1a; color: #e0e0e0; padding: 24px; border-radius: 0 0 12px 12px;">
             <p>Hola <strong>${params.clientName}</strong>,</p>
             <p>¡Buenas noticias! Tu producto llegó a nuestra bodega y está siendo procesado para su envío.</p>
+            ${
+              params.entregaEstimada
+                ? `<div style="margin:16px 0; padding:12px 16px; background:#252525; border-radius:8px; border-left:3px solid #f57c00;">
+                     <span style="color:#999; font-size:0.8rem;">Tiempo estimado de entrega</span><br/>
+                     <strong style="color:#f57c00; font-size:1.05rem;">${params.entregaEstimada}</strong>
+                   </div>`
+                : ""
+            }
             ${fotosHtml}
             ${params.notas ? `<p style="color:#aaa;">${params.notas}</p>` : ""}
             <div style="text-align: center; margin: 24px 0;">
@@ -297,6 +306,7 @@ export async function sendEntregaConfirmacion(params: {
   novedad?: string;
   recibidoPor?: string;
   recibidoPorCedula?: string;
+  recibidoPorContacto?: string;
 }): Promise<void> {
   const client = getClient();
   if (!client) return;
@@ -354,7 +364,7 @@ export async function sendEntregaConfirmacion(params: {
                 params.recibidoPor
                   ? `<tr>
                        <td style="padding: 8px; color: #999;">Recibido por</td>
-                       <td style="padding: 8px;"><strong>${params.recibidoPor}${params.recibidoPorCedula ? ` · CI ${params.recibidoPorCedula}` : ""}</strong></td>
+                       <td style="padding: 8px;"><strong>${params.recibidoPor}${params.recibidoPorCedula ? ` · CI ${params.recibidoPorCedula}` : ""}${params.recibidoPorContacto ? ` · ${params.recibidoPorContacto}` : ""}</strong></td>
                      </tr>`
                   : ""
               }

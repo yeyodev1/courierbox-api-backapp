@@ -32,6 +32,7 @@ export interface IEnvioDomicilio extends Document {
   recibidoPorNombre: string;
   recibidoPorApellido: string;
   recibidoPorCedula: string;
+  recibidoPorContacto: string;
   entregadoEn?: Date;
   entregadoPor?: mongoose.Types.ObjectId;
   trayectoUsa: ITrayectoPago;
@@ -83,6 +84,7 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     recibidoPorNombre: { type: String, default: "" },
     recibidoPorApellido: { type: String, default: "" },
     recibidoPorCedula: { type: String, default: "" },
+    recibidoPorContacto: { type: String, default: "" },
     entregadoEn: { type: Date },
     entregadoPor: { type: Schema.Types.ObjectId, ref: "User" },
     trayectoUsa: { type: trayectoSchema, default: () => ({}) },
