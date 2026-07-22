@@ -12,25 +12,38 @@ import {
   marcarPagoEnvio,
   uploadEnvioArchivo,
   marcarEntregado,
+  asignarMotorizado,
+  listMotorizados,
+  createMotorizado,
+  deleteMotorizado,
   resumenEnvios,
 } from "../controllers/envios.controller";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.use(requireAuth);
-router.use(requireRole(["admin", "asesor", "gerencia", "superadmin"]));
+const STAFF = ["admin", "asesor", "gerencia", "superadmin", "bodega"];
+const STAFF_AND_MOTORIZADO = [...STAFF, "motorizado"];
 
-router.get("/", listEnvios);
-router.get("/resumen", resumenEnvios);
-router.get("/buscar-paquetes", buscarPaquetes);
-router.get("/buscar-clientes", buscarClientes);
-router.get("/:id", getEnvio);
-router.post("/", createEnvio);
-router.patch("/:id", updateEnvio);
-router.patch("/:id/pago", marcarPagoEnvio);
-router.patch("/:id/entregado", marcarEntregado);
-router.post("/:id/upload", upload.single("file"), uploadEnvioArchivo);
-router.delete("/:id", deleteEnvio);
+router.use(requireAuth);
+
+// Read + delivery execution: staff and motorizados (controller scopes motorizados to their own).
+router.get("/", requireRole(STAFF_AND_MOTORIZADO), listEnvios);
+router.get("/resumen", requireRole(STAFF), resumenEnvios);
+router.get("/motorizados", requireRole(STAFF), listMotorizados);
+router.post("/motorizados", requireRole(STAFF), createMotorizado);
+router.delete("/motorizados/:id", requireRole(STAFF), deleteMotorizado);
+router.get("/buscar-paquetes", requireRole(STAFF), buscarPaquetes);
+router.get("/buscar-clientes", requireRole(STAFF), buscarClientes);
+router.get("/:id", requireRole(STAFF_AND_MOTORIZADO), getEnvio);
+router.patch("/:id/entregado", requireRole(STAFF_AND_MOTORIZADO), marcarEntregado);
+router.post("/:id/upload", requireRole(STAFF_AND_MOTORIZADO), upload.single("file"), uploadEnvioArchivo);
+
+// Management: staff only.
+router.post("/", requireRole(STAFF), createEnvio);
+router.patch("/:id/asignar", requireRole(STAFF), asignarMotorizado);
+router.patch("/:id/pago", requireRole(STAFF), marcarPagoEnvio);
+router.patch("/:id", requireRole(STAFF), updateEnvio);
+router.delete("/:id", requireRole(STAFF), deleteEnvio);
 
 export default router;

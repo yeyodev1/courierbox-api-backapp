@@ -12,11 +12,14 @@ export interface ITrayectoPago {
 }
 
 export interface IEnvioDomicilio extends Document {
-  paqueteId: mongoose.Types.ObjectId;
+  paqueteId?: mongoose.Types.ObjectId;
   modo: "local" | "interprovincial";
   clienteNombre: string;
   clienteDireccion: string;
   clienteTelefono: string;
+  clienteEmail: string;
+  asignadoA?: mongoose.Types.ObjectId;
+  asignadoNombre: string;
   numeroInvoice: string;
   ciudadDestino: string;
   proveedorUtilizado: string;
@@ -26,6 +29,10 @@ export interface IEnvioDomicilio extends Document {
   fotoEntregaUrl: string;
   firmaUrl: string;
   novedad: string;
+  recibidoPorNombre: string;
+  recibidoPorApellido: string;
+  recibidoPorCedula: string;
+  recibidoPorContacto: string;
   entregadoEn?: Date;
   entregadoPor?: mongoose.Types.ObjectId;
   trayectoUsa: ITrayectoPago;
@@ -57,12 +64,14 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     paqueteId: {
       type: Schema.Types.ObjectId,
       ref: "Paquete",
-      required: true,
     },
     modo: { type: String, enum: ["local", "interprovincial"], default: "local" },
     clienteNombre: { type: String, required: true },
     clienteDireccion: { type: String, required: true },
     clienteTelefono: { type: String, default: "" },
+    clienteEmail: { type: String, default: "" },
+    asignadoA: { type: Schema.Types.ObjectId, ref: "User" },
+    asignadoNombre: { type: String, default: "" },
     numeroInvoice: { type: String, default: "" },
     ciudadDestino: { type: String, default: "" },
     proveedorUtilizado: { type: String, default: "" },
@@ -72,6 +81,10 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     fotoEntregaUrl: { type: String, default: "" },
     firmaUrl: { type: String, default: "" },
     novedad: { type: String, default: "" },
+    recibidoPorNombre: { type: String, default: "" },
+    recibidoPorApellido: { type: String, default: "" },
+    recibidoPorCedula: { type: String, default: "" },
+    recibidoPorContacto: { type: String, default: "" },
     entregadoEn: { type: Date },
     entregadoPor: { type: Schema.Types.ObjectId, ref: "User" },
     trayectoUsa: { type: trayectoSchema, default: () => ({}) },
@@ -91,6 +104,7 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
 envioDomicilioSchema.index({ paqueteId: 1 });
 envioDomicilioSchema.index({ estado: 1 });
 envioDomicilioSchema.index({ modo: 1, createdAt: -1 });
+envioDomicilioSchema.index({ asignadoA: 1, estado: 1, createdAt: -1 });
 
 export const EnvioDomicilio = mongoose.model<IEnvioDomicilio>(
   "EnvioDomicilio",

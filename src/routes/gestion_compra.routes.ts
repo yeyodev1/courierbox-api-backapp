@@ -12,14 +12,16 @@ import {
   reNotificar,
   comisionPreview,
   uploadImagen,
+  recepcionBodega,
 } from "../controllers/gestion_compra.controller.js";
 
 export const gestionCompraRouter = Router();
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-const canAccess = requireRole(["admin", "asesor", "gerencia", "superadmin"]);
+const canAccess = requireRole(["admin", "asesor", "gerencia", "superadmin", "bodega"]);
 const adminOnly = requireRole(["admin", "gerencia", "superadmin"]);
+const bodegaAccess = requireRole(["admin", "gerencia", "superadmin", "bodega"]);
 
 // --- Public (no auth) ---
 gestionCompraRouter.get("/view/:token", getByToken);
@@ -43,3 +45,6 @@ gestionCompraRouter.patch("/:id", canAccess, updateGestion);
 // Admin actions
 gestionCompraRouter.post("/:id/confirmar-reserva", adminOnly, confirmarReserva);
 gestionCompraRouter.post("/:id/notificar", adminOnly, reNotificar);
+
+// Bodega: registrar recepción (fotos) y notificar al cliente
+gestionCompraRouter.post("/:id/recepcion-bodega", bodegaAccess, recepcionBodega);
