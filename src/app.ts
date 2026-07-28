@@ -28,6 +28,7 @@ import { cuentasBancariasRouter } from "./routes/cuentas_bancarias.routes";
 import cajaRouter from "./routes/caja.routes";
 import produccionRouter from "./routes/produccion.routes";
 import reportesRouter from "./routes/reportes.routes";
+import notificacionRouter from "./routes/notificacion.routes";
 
 export function createApp() {
   const app = express();
@@ -85,6 +86,7 @@ export function createApp() {
   app.use("/api/v1/caja", cajaRouter);
   app.use("/api/v1/produccion", produccionRouter);
   app.use("/api/v1/reportes", reportesRouter);
+  app.use("/api/v1/notificaciones", notificacionRouter);
   app.use("/api/v1/contactos", contactosRouter);
   app.use("/api/v1/contactos-cb", contactosCbRouter);
   app.use("/api/v1/cuentas-bancarias", cuentasBancariasRouter);

@@ -11,6 +11,22 @@ export interface ITrayectoPago {
   notas: string;
 }
 
+export interface IEnvioEvento {
+  tipo: string;
+  estadoAnterior?: string;
+  estadoNuevo?: string;
+  userId: string;
+  userName: string;
+  notas: string;
+  evidencia?: {
+    fotoUrl?: string;
+    firmaUrl?: string;
+    receptorNombre?: string;
+    receptorCedula?: string;
+  };
+  createdAt: Date;
+}
+
 export interface IEnvioDomicilio extends Document {
   paqueteId?: mongoose.Types.ObjectId;
   gestionCompraId?: mongoose.Types.ObjectId;
@@ -28,7 +44,9 @@ export interface IEnvioDomicilio extends Document {
   valorPagadoProveedor: number;
   guiaUrl: string;
   fotoEntregaUrl: string;
+  fotoEntregaPublicId: string;
   firmaUrl: string;
+  firmaPublicId: string;
   novedad: string;
   recibidoPorNombre: string;
   recibidoPorApellido: string;
@@ -38,9 +56,10 @@ export interface IEnvioDomicilio extends Document {
   entregadoPor?: mongoose.Types.ObjectId;
   trayectoUsa: ITrayectoPago;
   trayectoLocal: ITrayectoPago;
-  estado: "pendiente" | "asignado" | "en_ruta" | "entregado" | "fallido";
+  estado: "pendiente" | "asignado" | "en_ruta" | "entregado" | "fallido" | "reprogramado";
   evidenciaUrl: string;
   notas: string;
+  bitacora: IEnvioEvento[];
   creadoPor: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -56,6 +75,25 @@ const trayectoSchema = new Schema<ITrayectoPago>(
     fechaPago: { type: Date },
     comprobanteUrl: { type: String, default: "" },
     notas: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const envioEventoSchema = new Schema<IEnvioEvento>(
+  {
+    tipo: { type: String, required: true },
+    estadoAnterior: { type: String },
+    estadoNuevo: { type: String },
+    userId: { type: String, required: true },
+    userName: { type: String, required: true },
+    notas: { type: String, default: "" },
+    evidencia: {
+      fotoUrl: { type: String },
+      firmaUrl: { type: String },
+      receptorNombre: { type: String },
+      receptorCedula: { type: String },
+    },
+    createdAt: { type: Date, default: () => new Date() },
   },
   { _id: false }
 );
@@ -84,7 +122,9 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     valorPagadoProveedor: { type: Number, default: 0, min: 0 },
     guiaUrl: { type: String, default: "" },
     fotoEntregaUrl: { type: String, default: "" },
+    fotoEntregaPublicId: { type: String, default: "" },
     firmaUrl: { type: String, default: "" },
+    firmaPublicId: { type: String, default: "" },
     novedad: { type: String, default: "" },
     recibidoPorNombre: { type: String, default: "" },
     recibidoPorApellido: { type: String, default: "" },
@@ -96,17 +136,19 @@ const envioDomicilioSchema = new Schema<IEnvioDomicilio>(
     trayectoLocal: { type: trayectoSchema, default: () => ({}) },
     estado: {
       type: String,
-      enum: ["pendiente", "asignado", "en_ruta", "entregado", "fallido"],
+      enum: ["pendiente", "asignado", "en_ruta", "entregado", "fallido", "reprogramado"],
       default: "pendiente",
     },
     evidenciaUrl: { type: String, default: "" },
     notas: { type: String, default: "" },
+    bitacora: { type: [envioEventoSchema], default: [] },
     creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true }
 );
 
-envioDomicilioSchema.index({ paqueteId: 1 });
+envioDomicilioSchema.index({ paqueteId: 1 }, { unique: true, sparse: true });
+envioDomicilioSchema.index({ gestionCompraId: 1 }, { unique: true, sparse: true });
 envioDomicilioSchema.index({ estado: 1 });
 envioDomicilioSchema.index({ modo: 1, createdAt: -1 });
 envioDomicilioSchema.index({ asignadoA: 1, estado: 1, createdAt: -1 });

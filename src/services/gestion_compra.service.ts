@@ -2,8 +2,8 @@ import crypto from "crypto";
 import { models } from "../models/index.js";
 import { env } from "../config/env.js";
 import { getCurrentAuthUser } from "../middleware/auth.middleware.js";
-import { sendGestionCompraConfirmacion, sendRecepcionBodegaCliente } from "./email.service.js";
-import { enviarWebhookCompraRegistrada } from "./ghl-webhook.service.js";
+import { createAndSendNotification } from "./notification.service.js";
+import { postFinancialMovement } from "./financial-movement.service.js";
 import { calculateFee } from "./fee.service.js";
 
 export type GestionCompraEstado = "borrador" | "activa" | "completado" | "cancelado";
@@ -15,7 +15,8 @@ export interface GestionCompraFotoInput {
   createdAt?: string | Date;
 }
 
-const ADMIN_ROLES = ["admin", "superadmin", "gerencia", "bodega"];
+const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
+const ALL_RECORDS_ROLES = [...ADMIN_ROLES, "bodega"];
 
 export interface CreateGestionCompraInput {
   asesorId: string;
@@ -33,6 +34,19 @@ export interface CreateGestionCompraInput {
   stage?: GestionCompraStage;
   notas?: string;
   estado?: GestionCompraEstado;
+  tipoServicio?: "logistica" | "compra_total";
+  prioridad?: "normal" | "alta" | "urgente";
+  fechaLimiteCompra?: string;
+  productos?: Array<{
+    tienda: string;
+    enlace?: string;
+    descripcion: string;
+    cantidad?: number;
+    variante?: string;
+    valorUnitario?: number;
+    valorEnvio?: number;
+    peso?: number;
+  }>;
   createdByUserId: string;
   createdByUserName: string;
 }
@@ -104,8 +118,13 @@ export async function createGestionCompra(input: CreateGestionCompraInput) {
   const gestion = await models.gestionesCompra.create({
     asesorId,
     contactoId: input.contactoId,
+    tipoServicio: input.tipoServicio ?? "compra_total",
+    prioridad: input.prioridad ?? "normal",
+    fechaLimiteCompra: input.fechaLimiteCompra ? new Date(input.fechaLimiteCompra) : undefined,
+    productos: input.productos ?? [],
     valorTotal: input.valorTotal,
     valorReserva: input.valorReserva,
+    valorPagado: 0,
     cuentaBancariaId: input.cuentaBancariaId,
     costoVenta: input.costoVenta,
     valorComision: input.valorComision,
@@ -119,6 +138,10 @@ export async function createGestionCompra(input: CreateGestionCompraInput) {
       createdAt: photo.createdAt ? new Date(photo.createdAt) : new Date(),
     })) ?? (input.imagenCompraUrl ? [{ url: input.imagenCompraUrl, title: "Imagen principal", createdAt: new Date() }] : []),
     stage: input.stage ?? "solicitada",
+    estadoPago: "pendiente",
+    estadoCompra: "pendiente",
+    estadoBodega: "pendiente",
+    estadoEntrega: "sin_envio",
     notas: input.notas,
     estado: input.estado ?? "activa",
     auditLog: [
@@ -132,10 +155,11 @@ export async function createGestionCompra(input: CreateGestionCompraInput) {
     ],
   });
 
-  // Fire-and-forget notifications
-  sendNotificacionCliente(String(gestion._id)).catch((err) =>
-    console.error("[gestion_compra] notification error:", err)
-  );
+  try {
+    await sendNotificacionCliente(String(gestion._id));
+  } catch (err) {
+    console.error("[gestion_compra] notification persistence error:", err);
+  }
 
   return gestion;
 }
@@ -155,7 +179,7 @@ export async function listGestiones(
   const filter: Record<string, any> = {};
 
   // Role-based filtering
-  if (!ADMIN_ROLES.includes(role)) {
+  if (!ALL_RECORDS_ROLES.includes(role)) {
     filter.asesorId = userId;
   } else if (opts.asesorId) {
     filter.asesorId = opts.asesorId;
@@ -164,9 +188,9 @@ export async function listGestiones(
   if (opts.estado) filter.estado = opts.estado;
 
   // Date filter for monthly view
-  if (opts.mes !== undefined && opts.año !== undefined) {
-    const start = new Date(opts.año, opts.mes - 1, 1);
-    const end = new Date(opts.año, opts.mes, 1);
+  if (opts.año !== undefined) {
+    const start = opts.mes !== undefined ? new Date(opts.año, opts.mes - 1, 1) : new Date(opts.año, 0, 1);
+    const end = opts.mes !== undefined ? new Date(opts.año, opts.mes, 1) : new Date(opts.año + 1, 0, 1);
     filter.createdAt = { $gte: start, $lt: end };
   }
 
@@ -202,7 +226,7 @@ export async function listAllGestionesForExport(
 ) {
   const filter: Record<string, any> = {};
 
-  if (!ADMIN_ROLES.includes(role)) {
+  if (!ALL_RECORDS_ROLES.includes(role)) {
     filter.asesorId = userId;
   } else if (opts.asesorId) {
     filter.asesorId = opts.asesorId;
@@ -210,9 +234,9 @@ export async function listAllGestionesForExport(
 
   if (opts.estado) filter.estado = opts.estado;
 
-  if (opts.mes !== undefined && opts.año !== undefined) {
-    const start = new Date(opts.año, opts.mes - 1, 1);
-    const end = new Date(opts.año, opts.mes, 1);
+  if (opts.año !== undefined) {
+    const start = opts.mes !== undefined ? new Date(opts.año, opts.mes - 1, 1) : new Date(opts.año, 0, 1);
+    const end = opts.mes !== undefined ? new Date(opts.año, opts.mes, 1) : new Date(opts.año + 1, 0, 1);
     filter.createdAt = { $gte: start, $lt: end };
   }
 
@@ -236,12 +260,20 @@ export async function getGestionById(id: string) {
 }
 
 export async function getGestionByViewToken(token: string) {
-  return models.gestionesCompra
+  const gestion = await models.gestionesCompra
     .findOne({ viewToken: token })
     .populate("contactoId", "nombre email telefono")
     .populate("asesorId", "name email")
     .populate("cuentaBancariaId", "banco titular")
     .lean();
+  if (!gestion) return null;
+  if (gestion.viewTokenExpiresAt && new Date(gestion.viewTokenExpiresAt) <= new Date()) return null;
+  if (!gestion.viewTokenExpiresAt) {
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await models.gestionesCompra.findByIdAndUpdate(gestion._id, { $set: { viewTokenExpiresAt: expiresAt } });
+    gestion.viewTokenExpiresAt = expiresAt;
+  }
+  return gestion;
 }
 
 export async function updateGestion(
@@ -260,9 +292,7 @@ export async function updateGestion(
       : undefined,
     imagenCompraUrl: input.imagenCompraUrl,
     fotosRelacionadas: input.fotosRelacionadas,
-    stage: input.stage,
     notas: input.notas,
-    estado: input.estado,
   };
 
   if (isAdmin) {
@@ -271,6 +301,16 @@ export async function updateGestion(
     if (input.cuentaBancariaId !== undefined) allowed.cuentaBancariaId = input.cuentaBancariaId;
     if (input.costoVenta !== undefined) allowed.costoVenta = input.costoVenta;
     if (input.valorComision !== undefined) allowed.valorComision = input.valorComision;
+    if (input.stage !== undefined) allowed.stage = input.stage;
+    if (input.estado !== undefined) allowed.estado = input.estado;
+  }
+
+  const existing = await models.gestionesCompra.findById(id).select("valorTotal valorReserva").lean();
+  if (!existing) return null;
+  const resultingTotal = Number(input.valorTotal ?? existing.valorTotal);
+  const resultingReservation = Number(input.valorReserva ?? existing.valorReserva);
+  if (resultingReservation < 0 || resultingReservation > resultingTotal) {
+    throw new Error("La reserva debe estar entre cero y el valor total");
   }
 
   // Remove undefined fields
@@ -291,7 +331,7 @@ export async function updateGestion(
     .findByIdAndUpdate(
       id,
       { $set: update, $push: { auditLog: auditEntry } },
-      { new: true }
+      { new: true, runValidators: true }
     )
     .populate("contactoId", "nombre email telefono")
     .populate("asesorId", "name email")
@@ -320,9 +360,131 @@ export async function confirmarReserva(id: string, userId: string, userName: str
     .lean();
 }
 
+export async function confirmarPago(id: string, monto: number, userId: string, userName: string) {
+  const gestion = await models.gestionesCompra.findById(id).lean();
+  if (!gestion) return null;
+  if (monto <= 0 || monto > Number(gestion.valorTotal || 0)) {
+    throw new Error("El monto confirmado debe ser mayor a cero y no superar el valor total");
+  }
+  const transitioned = await models.gestionesCompra.findOneAndUpdate(
+    { _id: id, estadoPago: { $ne: "confirmado" } },
+    {
+      $set: {
+        estadoPago: "confirmado",
+        valorPagado: monto,
+        pagoConfirmadoEn: new Date(),
+        pagoConfirmadoPor: userId,
+        reservaConfirmada: true,
+      },
+      $push: { auditLog: { timestamp: new Date(), action: "pago_confirmado", userId, userName, notes: `Pago confirmado por $${monto.toFixed(2)}` } },
+    },
+    { new: true, runValidators: true }
+  ).populate("contactoId", "nombre email telefono").populate("asesorId", "name email").lean();
+  const updated = transitioned ?? await models.gestionesCompra.findById(id)
+    .populate("contactoId", "nombre email telefono")
+    .populate("asesorId", "name email")
+    .lean();
+  if (!updated || updated.estadoPago !== "confirmado") return null;
+  if (Number(updated.valorPagado || 0) !== monto) {
+    throw new Error("El pago ya fue confirmado con un monto diferente");
+  }
+
+  await Promise.all([
+    postFinancialMovement({
+      direccion: "ingreso",
+      base: "devengado",
+      origen: "gestion",
+      origenId: id,
+      concepto: "venta_confirmada",
+      categoria: "GESTION_COMPRA",
+      monto,
+      estado: "confirmado",
+      fechaOperacion: updated.pagoConfirmadoEn ?? new Date(),
+      fechaPago: updated.pagoConfirmadoEn ?? new Date(),
+      clienteId: typeof updated.contactoId === "object" ? (updated.contactoId as any)._id : updated.contactoId,
+      asesorId: typeof updated.asesorId === "object" ? (updated.asesorId as any)._id : updated.asesorId,
+      creadoPor: userId,
+    }),
+    postFinancialMovement({
+      direccion: "egreso",
+      base: "devengado",
+      origen: "gestion",
+      origenId: id,
+      concepto: "comision_asesor",
+      categoria: "COMISION",
+      monto: Number(updated.valorComision || 0),
+      estado: "confirmado",
+      fechaOperacion: updated.pagoConfirmadoEn ?? new Date(),
+      asesorId: typeof updated.asesorId === "object" ? (updated.asesorId as any)._id : updated.asesorId,
+      creadoPor: userId,
+    }),
+  ]);
+  const contacto = updated.contactoId as any;
+  if (contacto?.email) {
+    await createAndSendNotification({
+      evento: "pago_confirmado",
+      destinatario: contacto.email,
+      operacionTipo: "gestion_compra",
+      operacionId: id,
+      payload: {
+        to: contacto.email,
+        clientName: contacto.nombre,
+        subject: "Pago confirmado por Courier Box",
+        title: "Pago confirmado",
+        message: `Confirmamos tu pago de $${monto.toFixed(2)}. Tu gestión continuará al proceso de compra.`,
+        viewUrl: `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`,
+      },
+    });
+  }
+  return updated;
+}
+
+export async function asignarComprador(id: string, compradorId: string, userId: string, userName: string) {
+  const comprador = await models.users.findOne({ _id: compradorId, activo: { $ne: false }, role: { $in: ["admin", "gerencia", "superadmin", "asesor"] } }).select("name email").lean();
+  if (!comprador) throw new Error("Comprador no válido");
+  return models.gestionesCompra.findByIdAndUpdate(
+    id,
+    {
+      $set: { compradorAsignadoId: compradorId, estadoCompra: "asignada", stage: "revisando" },
+      $push: { auditLog: { timestamp: new Date(), action: "comprador_asignado", userId, userName, notes: `Asignado a ${comprador.name || comprador.email}` } },
+    },
+    { new: true, runValidators: true }
+  ).populate("compradorAsignadoId", "name email").lean();
+}
+
+export async function marcarComprada(id: string, numeroOrden: string, userId: string, userName: string) {
+  const updated = await models.gestionesCompra.findOneAndUpdate(
+    { _id: id, estadoCompra: { $in: ["asignada", "comprando", "pendiente"] } },
+    {
+      $set: { estadoCompra: "comprada", stage: "comprada" },
+      $push: { auditLog: { timestamp: new Date(), action: "compra_realizada", userId, userName, notes: numeroOrden ? `Orden ${numeroOrden}` : "Compra realizada" } },
+    },
+    { new: true, runValidators: true }
+  ).populate("contactoId", "nombre email").lean();
+  if (!updated) return null;
+  const contacto = updated.contactoId as any;
+  if (contacto?.email) {
+    await createAndSendNotification({
+      evento: "compra_realizada",
+      destinatario: contacto.email,
+      operacionTipo: "gestion_compra",
+      operacionId: id,
+      payload: {
+        to: contacto.email,
+        clientName: contacto.nombre,
+        subject: "Tu compra fue realizada",
+        title: "Compra realizada",
+        message: numeroOrden ? `Tu compra fue realizada con el número de orden ${numeroOrden}.` : "Tu compra fue realizada exitosamente.",
+        viewUrl: `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`,
+      },
+    });
+  }
+  return updated;
+}
+
 export async function getEstadisticasMensuales(
   año: number,
-  mes: number,
+  mes?: number,
   asesorId?: string
 ): Promise<{
   totalGestiones: number;
@@ -330,10 +492,14 @@ export async function getEstadisticasMensuales(
   sumaComision: number;
   sumaCostoVenta: number;
   sumaMargenNeto: number;
+  sumaValorPagado: number;
+  ventasConfirmadas: number;
+  comisionGanada: number;
   porEstado: Record<string, number>;
+  porEstadoPago: Record<string, number>;
 }> {
-  const start = new Date(año, mes - 1, 1);
-  const end = new Date(año, mes, 1);
+  const start = mes !== undefined ? new Date(año, mes - 1, 1) : new Date(año, 0, 1);
+  const end = mes !== undefined ? new Date(año, mes, 1) : new Date(año + 1, 0, 1);
 
   const matchStage: Record<string, any> = {
     createdAt: { $gte: start, $lt: end },
@@ -341,7 +507,7 @@ export async function getEstadisticasMensuales(
   };
   if (asesorId) matchStage.asesorId = asesorId;
 
-  const [stats, porEstado] = await Promise.all([
+  const [stats, porEstado, porEstadoPago, confirmed] = await Promise.all([
     models.gestionesCompra.aggregate([
       { $match: matchStage },
       {
@@ -351,16 +517,12 @@ export async function getEstadisticasMensuales(
           sumaValorTotal: { $sum: "$valorTotal" },
           sumaComision: { $sum: "$valorComision" },
           sumaCostoVenta: { $sum: "$costoVenta" },
+          sumaValorPagado: { $sum: "$valorPagado" },
           sumaMargenNeto: {
             $sum: {
-              $max: [
-                0,
-                {
-                  $subtract: [
-                    { $subtract: ["$valorTotal", "$valorComision"] },
-                    "$costoVenta",
-                  ],
-                },
+              $subtract: [
+                { $subtract: ["$valorTotal", "$valorComision"] },
+                "$costoVenta",
               ],
             },
           },
@@ -371,18 +533,29 @@ export async function getEstadisticasMensuales(
       { $match: { createdAt: { $gte: start, $lt: end }, ...(asesorId ? { asesorId } : {}) } },
       { $group: { _id: "$estado", count: { $sum: 1 } } },
     ]),
+    models.gestionesCompra.aggregate([
+      { $match: matchStage },
+      { $group: { _id: "$estadoPago", count: { $sum: 1 } } },
+    ]),
+    models.gestionesCompra.aggregate([
+      { $match: { pagoConfirmadoEn: { $gte: start, $lt: end }, estadoPago: "confirmado", ...(asesorId ? { asesorId } : {}) } },
+      { $group: { _id: null, ventasConfirmadas: { $sum: "$valorPagado" }, comisionGanada: { $sum: "$valorComision" } } },
+    ]),
   ]);
 
   const estadoMap: Record<string, number> = {};
   for (const item of porEstado) {
     estadoMap[item._id] = item.count;
   }
+  const pagoMap: Record<string, number> = {};
+  for (const item of porEstadoPago) pagoMap[item._id || "pendiente"] = item.count;
 
   const result = stats[0] ?? {
     totalGestiones: 0,
     sumaValorTotal: 0,
     sumaComision: 0,
     sumaCostoVenta: 0,
+    sumaValorPagado: 0,
     sumaMargenNeto: 0,
   };
 
@@ -392,11 +565,15 @@ export async function getEstadisticasMensuales(
     sumaComision: result.sumaComision,
     sumaCostoVenta: result.sumaCostoVenta,
     sumaMargenNeto: result.sumaMargenNeto,
+    sumaValorPagado: Number(confirmed[0]?.ventasConfirmadas || 0),
+    ventasConfirmadas: Number(confirmed[0]?.ventasConfirmadas || 0),
+    comisionGanada: Number(confirmed[0]?.comisionGanada || 0),
     porEstado: estadoMap,
+    porEstadoPago: pagoMap,
   };
 }
 
-export async function sendNotificacionCliente(gestionId: string): Promise<void> {
+export async function sendNotificacionCliente(gestionId: string, force = false): Promise<void> {
   const gestion = await models.gestionesCompra
     .findById(gestionId)
     .populate<{ contactoId: { nombre: string; email?: string; telefono?: string } }>(
@@ -413,45 +590,40 @@ export async function sendNotificacionCliente(gestionId: string): Promise<void> 
 
   const viewUrl = `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${gestion.viewToken}`;
 
-  // 1. Email
+  let emailSent = false;
   if (contacto?.email) {
-    await sendGestionCompraConfirmacion({
-      to: contacto.email,
-      clientName: contacto.nombre,
-      gestionId: String(gestion._id),
-      valorTotal: gestion.valorTotal,
-      fechaEntregaTentativa: gestion.fechaEntregaTentativa,
-      paginaCompra: gestion.paginaCompra,
-      imagenCompraUrl: gestion.imagenCompraUrl,
-      viewUrl,
-      asesorNombre: asesor?.name ?? "Courier Box",
+    const notification = await createAndSendNotification({
+      evento: "gestion_creada",
+      destinatario: contacto.email,
+      operacionTipo: "gestion_compra",
+      operacionId: String(gestion._id),
+      force,
+      payload: {
+        to: contacto.email,
+        clientName: contacto.nombre,
+        gestionId: String(gestion._id),
+        valorTotal: gestion.valorTotal,
+        fechaEntregaTentativa: gestion.fechaEntregaTentativa,
+        paginaCompra: gestion.paginaCompra,
+        imagenCompraUrl: gestion.imagenCompraUrl,
+        viewUrl,
+        asesorNombre: asesor?.name ?? "Courier Box",
+      },
     });
+    emailSent = notification.estado === "enviada";
   }
 
-  // 2. GHL Webhook
-  if (contacto?.telefono || contacto?.email) {
-    await enviarWebhookCompraRegistrada({
-      gestionId: String(gestion._id),
-      clienteNombre: contacto.nombre,
-      clienteTelefono: contacto?.telefono ?? "",
-      clienteEmail: contacto?.email ?? "",
-      valorTotal: gestion.valorTotal,
-      fechaEntregaTentativa: gestion.fechaEntregaTentativa,
-      viewUrl,
-      asesorNombre: asesor?.name ?? "Courier Box",
-    });
-  }
-
-  // Mark notification sent
   await models.gestionesCompra.findByIdAndUpdate(gestionId, {
-    $set: { notificacionEnviada: true },
+    $set: { notificacionEnviada: emailSent },
     $push: {
       auditLog: {
         timestamp: new Date(),
-        action: "notificacion_enviada",
+        action: emailSent ? "notificacion_enviada" : "notificacion_fallida",
         userId: "system",
         userName: "Sistema",
-        notes: `Notificación enviada a ${contacto?.email ?? contacto?.telefono ?? "cliente"}`,
+        notes: emailSent
+          ? `Correo enviado a ${contacto?.email}`
+          : `Correo pendiente o fallido para ${contacto?.email ?? "cliente sin correo"}`,
       },
     },
   });
@@ -469,7 +641,7 @@ export async function registrarRecepcionBodega(
     createdAt: photo.createdAt ? new Date(photo.createdAt) : new Date(),
   }));
 
-  const set: Record<string, any> = { stage: "comprada" };
+  const set: Record<string, any> = { stage: "comprada", estadoBodega: "recibida" };
   if (nuevasFotos[0]?.url) set.imagenCompraUrl = nuevasFotos[0].url;
 
   const updated = await models.gestionesCompra
@@ -506,14 +678,20 @@ export async function registrarRecepcionBodega(
     if (contacto?.email) {
       const viewUrl = `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`;
       const fotos = (updated.fotosRelacionadas ?? []).map((f: any) => f.url).filter(Boolean);
-      await sendRecepcionBodegaCliente({
-        to: contacto.email,
-        clientName: contacto.nombre,
-        fotos: fotos.length ? fotos : nuevasFotos.map((f) => f.url).filter(Boolean),
-        viewUrl,
-        asesorNombre: asesor?.name ?? "Courier Box",
-        notas: input.notas,
-        entregaEstimada: input.entregaEstimada,
+      await createAndSendNotification({
+        evento: "recepcion_bodega",
+        destinatario: contacto.email,
+        operacionTipo: "gestion_compra",
+        operacionId: String(updated._id),
+        payload: {
+          to: contacto.email,
+          clientName: contacto.nombre,
+          fotos: fotos.length ? fotos : nuevasFotos.map((f) => f.url).filter(Boolean),
+          viewUrl,
+          asesorNombre: asesor?.name ?? "Courier Box",
+          notas: input.notas,
+          entregaEstimada: input.entregaEstimada,
+        },
       });
     }
   }

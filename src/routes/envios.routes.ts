@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { requireAuth, requireRole } from "../middleware/auth.middleware";
+import type { UserRole } from "../models/user.model";
 import {
   listEnvios,
   getEnvio,
@@ -12,6 +13,9 @@ import {
   marcarPagoEnvio,
   uploadEnvioArchivo,
   marcarEntregado,
+  iniciarRuta,
+  marcarFallido,
+  reprogramarEnvio,
   asignarMotorizado,
   listMotorizados,
   createMotorizado,
@@ -20,30 +24,43 @@ import {
 } from "../controllers/envios.controller";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Tipo de archivo no permitido"));
+  },
+});
 
-const STAFF = ["admin", "asesor", "gerencia", "superadmin", "bodega"];
-const STAFF_AND_MOTORIZADO = [...STAFF, "motorizado"];
+const OPERATIONS: UserRole[] = ["admin", "gerencia", "superadmin", "bodega"];
+const OPERATIONS_AND_MOTORIZADO: UserRole[] = [...OPERATIONS, "motorizado"];
+const FINANCE: UserRole[] = ["admin", "gerencia", "superadmin"];
+const USER_MANAGERS: UserRole[] = ["admin", "gerencia", "superadmin"];
 
 router.use(requireAuth);
 
 // Read + delivery execution: staff and motorizados (controller scopes motorizados to their own).
-router.get("/", requireRole(STAFF_AND_MOTORIZADO), listEnvios);
-router.get("/resumen", requireRole(STAFF), resumenEnvios);
-router.get("/motorizados", requireRole(STAFF), listMotorizados);
-router.post("/motorizados", requireRole(STAFF), createMotorizado);
-router.delete("/motorizados/:id", requireRole(STAFF), deleteMotorizado);
-router.get("/buscar-paquetes", requireRole(STAFF), buscarPaquetes);
-router.get("/buscar-clientes", requireRole(STAFF), buscarClientes);
-router.get("/:id", requireRole(STAFF_AND_MOTORIZADO), getEnvio);
-router.patch("/:id/entregado", requireRole(STAFF_AND_MOTORIZADO), marcarEntregado);
-router.post("/:id/upload", requireRole(STAFF_AND_MOTORIZADO), upload.single("file"), uploadEnvioArchivo);
+router.get("/", requireRole(OPERATIONS_AND_MOTORIZADO), listEnvios);
+router.get("/resumen", requireRole(OPERATIONS), resumenEnvios);
+router.get("/motorizados", requireRole(OPERATIONS), listMotorizados);
+router.post("/motorizados", requireRole(USER_MANAGERS), createMotorizado);
+router.delete("/motorizados/:id", requireRole(USER_MANAGERS), deleteMotorizado);
+router.get("/buscar-paquetes", requireRole(OPERATIONS), buscarPaquetes);
+router.get("/buscar-clientes", requireRole(OPERATIONS), buscarClientes);
+router.get("/:id", requireRole(OPERATIONS_AND_MOTORIZADO), getEnvio);
+router.patch("/:id/iniciar-ruta", requireRole(["motorizado"]), iniciarRuta);
+router.patch("/:id/entregado", requireRole(["motorizado"]), marcarEntregado);
+router.patch("/:id/fallido", requireRole(["motorizado"]), marcarFallido);
+router.patch("/:id/reprogramar", requireRole(OPERATIONS), reprogramarEnvio);
+router.post("/:id/upload", requireRole(OPERATIONS_AND_MOTORIZADO), upload.single("file"), uploadEnvioArchivo);
 
 // Management: staff only.
-router.post("/", requireRole(STAFF), createEnvio);
-router.patch("/:id/asignar", requireRole(STAFF), asignarMotorizado);
-router.patch("/:id/pago", requireRole(STAFF), marcarPagoEnvio);
-router.patch("/:id", requireRole(STAFF), updateEnvio);
-router.delete("/:id", requireRole(STAFF), deleteEnvio);
+router.post("/", requireRole(OPERATIONS), createEnvio);
+router.patch("/:id/asignar", requireRole(OPERATIONS), asignarMotorizado);
+router.patch("/:id/pago", requireRole(FINANCE), marcarPagoEnvio);
+router.patch("/:id", requireRole(OPERATIONS), updateEnvio);
+router.delete("/:id", requireRole(FINANCE), deleteEnvio);
 
 export default router;

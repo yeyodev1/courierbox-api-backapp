@@ -10,7 +10,7 @@ import {
 export const cuentasBancariasRouter = Router();
 
 const canRead = requireRole(["admin", "asesor", "gerencia", "superadmin"]);
-const adminOnly = requireRole(["admin", "gerencia", "superadmin", "asesor"]);
+const adminOnly = requireRole(["admin", "gerencia", "superadmin"]);
 
 cuentasBancariasRouter.use(requireAuth);
 

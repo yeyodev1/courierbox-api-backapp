@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { models } from "../models/index";
+import { postFinancialMovement, reverseFinancialMovements } from "../services/financial-movement.service";
 import { uploadComprobante } from "../services/upload.service";
 
 function getUser(req: Request) {
@@ -54,7 +55,11 @@ export async function listCaja(req: Request, res: Response, next: NextFunction):
     if (desde || hasta) {
       query.fecha = {};
       if (desde) query.fecha.$gte = new Date(desde as string);
-      if (hasta) query.fecha.$lte = new Date(hasta as string);
+      if (hasta) {
+        const end = new Date(hasta as string);
+        end.setHours(23, 59, 59, 999);
+        query.fecha.$lte = end;
+      }
     }
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
@@ -76,9 +81,13 @@ export async function createCaja(req: Request, res: Response, next: NextFunction
     const user = getUser(req);
     if (!user) return void res.status(401).json({ error: "Unauthorized" });
 
-    const { tipo, categoria, monto, clienteNombre, clienteId, clienteEmail, clientePhone, descripcion, referencia, comprobanteUrl, fecha } = req.body;
+    const { tipo, categoria, monto, clienteNombre, clienteId, clienteEmail, clientePhone, descripcion, referencia, comprobanteUrl, fecha, idempotencyKey } = req.body;
     if (!tipo || !categoria || monto === undefined) {
       return void res.status(400).json({ error: "tipo, categoria, monto are required" });
+    }
+    if (idempotencyKey) {
+      const existing = await models.cajaMovimientos.findOne({ idempotencyKey: String(idempotencyKey), creadoPor: user.userId });
+      if (existing) return void res.status(200).json({ movimiento: existing });
     }
 
     const resolvedClienteId = await resolveClienteId(clienteNombre, clienteId, clienteEmail, clientePhone);
@@ -94,7 +103,29 @@ export async function createCaja(req: Request, res: Response, next: NextFunction
       comprobanteUrl: comprobanteUrl || "",
       fecha: fecha ? new Date(fecha) : new Date(),
       creadoPor: user.userId,
+      idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
     });
+
+    try {
+      await postFinancialMovement({
+        direccion: movimiento.tipo,
+        base: "caja",
+        origen: "caja",
+        origenId: String(movimiento._id),
+        concepto: "movimiento_caja",
+        categoria: movimiento.categoria,
+        monto: movimiento.monto,
+        estado: "confirmado",
+        fechaOperacion: movimiento.fecha,
+        fechaPago: movimiento.fecha,
+        clienteId: movimiento.clienteId,
+        creadoPor: user.userId,
+        metadata: { referencia: movimiento.referencia },
+      });
+    } catch (error) {
+      await models.cajaMovimientos.findByIdAndDelete(movimiento._id);
+      throw error;
+    }
 
     res.status(201).json({ movimiento });
   } catch (error) {
@@ -139,8 +170,8 @@ export async function resumenCaja(_req: Request, res: Response, next: NextFuncti
       ingresos: ingresosTotal,
       egresos: egresosTotal,
       saldo: (ingresosTotal.total || 0) - (egresosTotal.total || 0),
-      porTipo,
-      porCategoria,
+      porTipo: porCategoria,
+      porCategoria: porTipo,
     });
   } catch (error) {
     next(error);
@@ -179,6 +210,8 @@ export async function uploadCajaArchivo(req: Request, res: Response, next: NextF
 
 export async function deleteCaja(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
     const movimiento = await models.cajaMovimientos.findById(req.params.id).lean();
     if (!movimiento) {
       res.status(404).json({ error: "Movimiento not found" });
@@ -192,6 +225,7 @@ export async function deleteCaja(req: Request, res: Response, next: NextFunction
       return;
     }
 
+    await reverseFinancialMovements("caja", String(movimiento._id), user.userId);
     await models.cajaMovimientos.findByIdAndDelete(req.params.id);
     res.status(200).json({ message: "Movimiento eliminado" });
   } catch (error) {

@@ -11,6 +11,7 @@ export interface ICajaMovimiento extends Document {
   comprobanteUrl: string;
   fecha: Date;
   creadoPor: mongoose.Types.ObjectId;
+  idempotencyKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,11 +28,13 @@ const cajaMovimientoSchema = new Schema<ICajaMovimiento>(
     comprobanteUrl: { type: String, default: "" },
     fecha: { type: Date, default: Date.now },
     creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    idempotencyKey: { type: String, sparse: true },
   },
   { timestamps: true }
 );
 
 cajaMovimientoSchema.index({ tipo: 1, fecha: -1 });
 cajaMovimientoSchema.index({ categoria: 1, fecha: -1 });
+cajaMovimientoSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 export const CajaMovimiento = mongoose.model<ICajaMovimiento>("CajaMovimiento", cajaMovimientoSchema);

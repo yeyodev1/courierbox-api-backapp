@@ -1,5 +1,4 @@
 import { Router } from "express";
-import multer from "multer";
 import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   postCalculate,
@@ -11,20 +10,11 @@ import {
   deleteFeeConfig,
   listOrders,
   getOrder,
-  createOrder,
-  patchOrderStatus,
-  patchPaymentStatus,
-  generateOrderPaymentLink,
-  uploadOrderTransfer,
   getStats,
-  postShareOrder,
-  deleteShareOrder,
   getOrderByToken,
-  postResetViewToken,
   searchClients,
+  legacyOrderReadOnly,
 } from "../controllers/asesoria.controller";
-
-const upload = multer({ storage: multer.memoryStorage() });
 
 export const asesoriaRouter = Router();
 
@@ -48,19 +38,19 @@ asesoriaRouter.delete("/fee-configs/:id", requireRole(["admin"]), deleteFeeConfi
 
 // Purchase orders (admin + asesor)
 asesoriaRouter.get("/orders", listOrders);
-asesoriaRouter.post("/orders", createOrder);
+asesoriaRouter.post("/orders", legacyOrderReadOnly);
 asesoriaRouter.get("/orders/:id", getOrder);
-asesoriaRouter.patch("/orders/:id/status", requireRole(["admin"]), patchOrderStatus);
-asesoriaRouter.patch("/orders/:id/payment-status", requireRole(["admin"]), patchPaymentStatus);
-asesoriaRouter.post("/orders/:id/payment-link", generateOrderPaymentLink);
-asesoriaRouter.post("/orders/:id/transfer", upload.single("proof"), uploadOrderTransfer);
+asesoriaRouter.patch("/orders/:id/status", legacyOrderReadOnly);
+asesoriaRouter.patch("/orders/:id/payment-status", legacyOrderReadOnly);
+asesoriaRouter.post("/orders/:id/payment-link", legacyOrderReadOnly);
+asesoriaRouter.post("/orders/:id/transfer", legacyOrderReadOnly);
 
 // Sharing (owner + admin)
-asesoriaRouter.post("/orders/:id/share", postShareOrder);
-asesoriaRouter.delete("/orders/:id/share/:targetAsesorId", deleteShareOrder);
+asesoriaRouter.post("/orders/:id/share", legacyOrderReadOnly);
+asesoriaRouter.delete("/orders/:id/share/:targetAsesorId", legacyOrderReadOnly);
 
 // View token management
-asesoriaRouter.post("/orders/:id/reset-view-token", postResetViewToken);
+asesoriaRouter.post("/orders/:id/reset-view-token", legacyOrderReadOnly);
 
 // Client search
 asesoriaRouter.get("/clientes/search", searchClients);

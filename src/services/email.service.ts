@@ -3,6 +3,57 @@ import { env } from "../config/env";
 
 let resend: Resend | null = null;
 
+export interface EmailDeliveryResult {
+  success: boolean;
+  providerId?: string;
+  error?: string;
+}
+
+function escapeEmailHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
+  })[character] || character);
+}
+
+function safeEmailUrl(value: string): string {
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("URL de correo no permitida");
+  return escapeEmailHtml(url.toString());
+}
+
+export async function sendGestionLifecycleEmail(params: {
+  to: string;
+  clientName: string;
+  subject: string;
+  title: string;
+  message: string;
+  viewUrl: string;
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const clientName = escapeEmailHtml(params.clientName);
+    const title = escapeEmailHtml(params.title);
+    const message = escapeEmailHtml(params.message);
+    const viewUrl = safeEmailUrl(params.viewUrl);
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: params.subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#17130f;color:#fff;padding:24px;border-radius:12px"><h1 style="color:#f57c00">${title}</h1><p>Hola <strong>${clientName}</strong>,</p><p>${message}</p><p style="text-align:center;margin:24px 0"><a href="${viewUrl}" style="background:#f57c00;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Ver mi compra</a></p></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}
+
+function emailError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || "Error desconocido al enviar correo");
+}
+
 function getClient(): Resend | null {
   if (!env.RESEND_API_KEY) {
     console.warn("[email] RESEND_API_KEY not configured — skipping email");
@@ -85,9 +136,9 @@ export async function sendGestionCompraConfirmacion(params: {
   imagenCompraUrl?: string;
   viewUrl: string;
   asesorNombre: string;
-}): Promise<void> {
+}): Promise<EmailDeliveryResult> {
   const client = getClient();
-  if (!client) return;
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
 
   const fechaFormateada = new Date(params.fechaEntregaTentativa).toLocaleDateString("es-EC", {
     year: "numeric",
@@ -102,7 +153,7 @@ export async function sendGestionCompraConfirmacion(params: {
     : "";
 
   try {
-    await client.emails.send({
+    const response = await client.emails.send({
       from: `Courier Box <${env.EMAIL_FROM}>`,
       to: params.to,
       subject: "Tu gestión de compra ha sido registrada",
@@ -156,9 +207,12 @@ export async function sendGestionCompraConfirmacion(params: {
         </div>
       `,
     });
+    if (response.error) return { success: false, error: response.error.message };
     console.log(`[email] gestion compra confirmation sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
   } catch (err) {
     console.error("[email] failed to send gestion compra confirmation:", err);
+    return { success: false, error: emailError(err) };
   }
 }
 
@@ -170,9 +224,9 @@ export async function sendRecepcionBodegaCliente(params: {
   asesorNombre?: string;
   notas?: string;
   entregaEstimada?: string;
-}): Promise<void> {
+}): Promise<EmailDeliveryResult> {
   const client = getClient();
-  if (!client) return;
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
 
   const fotosHtml = params.fotos.length
     ? `<div style="margin: 16px 0; display:flex; flex-wrap:wrap; gap:8px; justify-content:center;">
@@ -186,7 +240,7 @@ export async function sendRecepcionBodegaCliente(params: {
     : "";
 
   try {
-    await client.emails.send({
+    const response = await client.emails.send({
       from: `Courier Box <${env.EMAIL_FROM}>`,
       to: params.to,
       subject: "Tu producto llegó a nuestra bodega 📦",
@@ -218,9 +272,12 @@ export async function sendRecepcionBodegaCliente(params: {
         </div>
       `,
     });
+    if (response.error) return { success: false, error: response.error.message };
     console.log(`[email] recepcion bodega sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
   } catch (err) {
     console.error("[email] failed to send recepcion bodega:", err);
+    return { success: false, error: emailError(err) };
   }
 }
 
@@ -233,9 +290,9 @@ export async function sendEnvioEnCaminoCliente(params: {
   proveedor?: string;
   guiaUrl?: string;
   ciudadDestino?: string;
-}): Promise<void> {
+}): Promise<EmailDeliveryResult> {
   const client = getClient();
-  if (!client) return;
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
 
   const esInter = params.modo === "interprovincial";
   const titulo = esInter ? "Tu pedido fue despachado 🚚" : "Tu guía de envío fue generada 🛵";
@@ -250,7 +307,7 @@ export async function sendEnvioEnCaminoCliente(params: {
     : "";
 
   try {
-    await client.emails.send({
+    const response = await client.emails.send({
       from: `Courier Box <${env.EMAIL_FROM}>`,
       to: params.to,
       subject: titulo,
@@ -290,9 +347,12 @@ export async function sendEnvioEnCaminoCliente(params: {
         </div>
       `,
     });
+    if (response.error) return { success: false, error: response.error.message };
     console.log(`[email] envio en camino sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
   } catch (err) {
     console.error("[email] failed to send envio en camino:", err);
+    return { success: false, error: emailError(err) };
   }
 }
 
@@ -307,9 +367,9 @@ export async function sendEntregaConfirmacion(params: {
   recibidoPor?: string;
   recibidoPorCedula?: string;
   recibidoPorContacto?: string;
-}): Promise<void> {
+}): Promise<EmailDeliveryResult> {
   const client = getClient();
-  if (!client) return;
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
 
   const fecha = new Date().toLocaleString("es-EC", {
     dateStyle: "long",
@@ -331,7 +391,7 @@ export async function sendEntregaConfirmacion(params: {
     : "";
 
   try {
-    await client.emails.send({
+    const response = await client.emails.send({
       from: `Courier Box <${env.EMAIL_FROM}>`,
       to: params.to,
       subject: "Tu pedido fue entregado ✅",
@@ -385,9 +445,12 @@ export async function sendEntregaConfirmacion(params: {
         </div>
       `,
     });
+    if (response.error) return { success: false, error: response.error.message };
     console.log(`[email] entrega confirmation sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
   } catch (err) {
     console.error("[email] failed to send entrega confirmation:", err);
+    return { success: false, error: emailError(err) };
   }
 }
 

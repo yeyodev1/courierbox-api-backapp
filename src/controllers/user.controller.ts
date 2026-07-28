@@ -2,6 +2,19 @@ import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import { models } from "../models/index";
 import { sendCredenciales } from "../services/email.service";
+import { USER_ROLES, type UserRole } from "../models/user.model";
+
+function actorRole(req: Request): UserRole | undefined {
+  return req.user?.role;
+}
+
+function canManageRole(req: Request, role: UserRole): boolean {
+  return actorRole(req) === "superadmin" || role !== "superadmin";
+}
+
+function parseRole(value: unknown): UserRole | null {
+  return USER_ROLES.includes(value as UserRole) ? (value as UserRole) : null;
+}
 
 export async function getUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -11,7 +24,7 @@ export async function getUsers(req: Request, res: Response, next: NextFunction):
       const regex = new RegExp(q.trim(), "i");
       query = { $or: [{ name: regex }, { email: regex }] };
     }
-    const users = await models.users.find(query).select("-passwordHash").sort({ createdAt: -1 });
+    const users = await models.users.find(query).select("-passwordHash -tokenVersion").sort({ activo: -1, createdAt: -1 });
     res.status(200).json({ users });
   } catch (error) {
     console.error("[user.controller] getUsers error:", error);
@@ -28,6 +41,12 @@ export async function createUser(req: Request, res: Response, next: NextFunction
       return;
     }
 
+    const requestedRole = parseRole(role ?? "asesor");
+    if (!requestedRole || !canManageRole(req, requestedRole)) {
+      res.status(403).json({ error: "No puedes asignar ese rol" });
+      return;
+    }
+
     const existingUser = await models.users.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       res.status(400).json({ error: "Email is already registered" });
@@ -41,7 +60,8 @@ export async function createUser(req: Request, res: Response, next: NextFunction
       email: email.toLowerCase(),
       passwordHash,
       name,
-      role: role || "user",
+      role: requestedRole,
+      activo: true,
     });
 
     if (sendEmail) {
@@ -62,6 +82,7 @@ export async function createUser(req: Request, res: Response, next: NextFunction
         email: newUser.email,
         name: newUser.name,
         role: newUser.role,
+        activo: newUser.activo,
       },
     });
   } catch (error) {
@@ -73,12 +94,34 @@ export async function createUser(req: Request, res: Response, next: NextFunction
 export async function updateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const { email, password, name, role } = req.body;
+    const { email, password, name, role, activo } = req.body;
 
     const user = await models.users.findById(id);
     if (!user) {
       res.status(404).json({ error: "User not found" });
       return;
+    }
+
+    if (!canManageRole(req, user.role)) {
+      res.status(403).json({ error: "Solo superadmin puede modificar una cuenta superadmin" });
+      return;
+    }
+
+    const requestedRole = role === undefined ? null : parseRole(role);
+    if (role !== undefined && (!requestedRole || !canManageRole(req, requestedRole))) {
+      res.status(403).json({ error: "No puedes asignar ese rol" });
+      return;
+    }
+
+    const removesActiveSuperadmin = user.role === "superadmin"
+      && user.activo !== false
+      && ((requestedRole && requestedRole !== "superadmin") || activo === false);
+    if (removesActiveSuperadmin) {
+      const activeSuperadmins = await models.users.countDocuments({ role: "superadmin", activo: { $ne: false } });
+      if (activeSuperadmins <= 1) {
+        res.status(400).json({ error: "No puedes desactivar ni cambiar el rol de la ultima cuenta superadmin" });
+        return;
+      }
     }
 
     if (email && email.toLowerCase() !== user.email) {
@@ -91,11 +134,24 @@ export async function updateUser(req: Request, res: Response, next: NextFunction
     }
 
     if (name) user.name = name;
-    if (role) user.role = role;
+    if (requestedRole && requestedRole !== user.role) {
+      user.role = requestedRole;
+      user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
+    }
+
+    if (typeof activo === "boolean" && activo !== user.activo) {
+      if (String(user._id) === req.user?.userId && !activo) {
+        res.status(400).json({ error: "No puedes desactivar tu propio usuario" });
+        return;
+      }
+      user.activo = activo;
+      user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
+    }
 
     if (password) {
       const salt = await bcrypt.genSalt(10);
       user.passwordHash = await bcrypt.hash(password, salt);
+      user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
     }
 
     await user.save();
@@ -107,6 +163,7 @@ export async function updateUser(req: Request, res: Response, next: NextFunction
         email: user.email,
         name: user.name,
         role: user.role,
+        activo: user.activo,
       },
     });
   } catch (error) {
@@ -125,13 +182,31 @@ export async function deleteUser(req: Request, res: Response, next: NextFunction
       return;
     }
 
-    const user = await models.users.findByIdAndDelete(id);
+    const user = await models.users.findById(id);
     if (!user) {
       res.status(404).json({ error: "User not found" });
       return;
     }
 
-    res.status(200).json({ message: "User deleted successfully" });
+
+    if (!canManageRole(req, user.role)) {
+      res.status(403).json({ error: "Solo superadmin puede desactivar una cuenta superadmin" });
+      return;
+    }
+
+    if (user.role === "superadmin") {
+      const activeSuperadmins = await models.users.countDocuments({ role: "superadmin", activo: { $ne: false } });
+      if (activeSuperadmins <= 1) {
+        res.status(400).json({ error: "No puedes desactivar la ultima cuenta superadmin" });
+        return;
+      }
+    }
+
+    user.activo = false;
+    user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
+    await user.save();
+
+    res.status(200).json({ message: "User deactivated successfully" });
   } catch (error) {
     console.error("[user.controller] deleteUser error:", error);
     next(error);

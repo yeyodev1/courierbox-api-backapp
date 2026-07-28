@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { requireAuth } from "../middleware/auth.middleware";
+import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import {
   generarFactura,
   getFacturasPendientes,
@@ -12,9 +12,10 @@ import {
 const upload = multer({ storage: multer.memoryStorage() });
 
 export const facturacionRouter = Router();
+const financeOnly = requireRole(["admin", "gerencia", "superadmin"]);
 
-facturacionRouter.post("/generar", requireAuth, generarFactura);
+facturacionRouter.post("/generar", requireAuth, financeOnly, generarFactura);
 facturacionRouter.get("/pendientes/:casillero", getFacturasPendientes);
 facturacionRouter.post("/pagar", upload.single("comprobante"), registrarPago);
-facturacionRouter.post("/confirmar/:facturaId", requireAuth, confirmarPago);
-facturacionRouter.get("/historial", requireAuth, getHistorialFacturas);
+facturacionRouter.post("/confirmar/:facturaId", requireAuth, financeOnly, confirmarPago);
+facturacionRouter.get("/historial", requireAuth, financeOnly, getHistorialFacturas);

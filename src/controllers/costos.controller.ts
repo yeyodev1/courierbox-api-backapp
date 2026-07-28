@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { models } from "../models/index";
+import { postFinancialMovement, reverseFinancialMovements } from "../services/financial-movement.service";
 import { deleteCloudinaryAsset, extractCloudinaryAssetRef, uploadGastoFactura } from "../services/upload.service";
 import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
 
@@ -58,7 +59,11 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
     if (desde || hasta) {
       query.fecha = {};
       if (desde) query.fecha.$gte = new Date(desde as string);
-      if (hasta) query.fecha.$lte = new Date(hasta as string);
+      if (hasta) {
+        const end = new Date(hasta as string);
+        end.setHours(23, 59, 59, 999);
+        query.fecha.$lte = end;
+      }
     }
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
@@ -122,11 +127,16 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       valorPorLibra,
       valorTotal,
       valorPagado,
+      idempotencyKey,
     } = req.body;
 
     if (!tipo || !categoria || monto === undefined || !descripcion) {
       res.status(400).json({ error: "tipo, categoria, monto, descripcion are required" });
       return;
+    }
+    if (idempotencyKey) {
+      const existing = await models.gastos.findOne({ idempotencyKey: String(idempotencyKey), creadoPor: user.userId });
+      if (existing) return void res.status(200).json({ gasto: existing });
     }
 
     const proveedorResolved = await resolveProveedor(proveedor);
@@ -149,7 +159,28 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       paqueteId: paqueteId || undefined,
       creadoPor: user.userId,
       updatedBy: user.userId,
+      idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
     });
+
+    try {
+      await postFinancialMovement({
+        direccion: "egreso",
+        base: "devengado",
+        origen: "gasto",
+        origenId: String(gasto._id),
+        concepto: "gasto_operativo",
+        categoria: String(categoria),
+        monto: Number(gasto.valorTotal || gasto.monto || 0),
+        estado: "confirmado",
+        fechaOperacion: gasto.fecha,
+        proveedorId: gasto.proveedorId,
+        creadoPor: user.userId,
+        metadata: { tipo: gasto.tipo, numeroFactura: gasto.numeroFactura },
+      });
+    } catch (error) {
+      await models.gastos.findByIdAndDelete(gasto._id);
+      throw error;
+    }
 
     res.status(201).json({ gasto });
   } catch (error) {
@@ -165,14 +196,11 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const updates = req.body;
-    delete updates._id;
-    delete updates.creadoPor;
-    delete updates.updatedBy;
-    delete updates.createdAt;
-    delete updates.updatedAt;
-    delete updates.comprobantePublicId;
-    delete updates.comprobanteResourceType;
+    const allowedFields = [
+      "tipo", "categoria", "monto", "descripcion", "fecha", "proveedor", "referencia",
+      "paqueteId", "numeroFactura", "fechaFactura", "libras", "valorPorLibra", "valorTotal", "valorPagado",
+    ];
+    const updates = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => allowedFields.includes(key))) as Record<string, any>;
 
     if (typeof updates.proveedor === "string") {
       const proveedorResolved = await resolveProveedor(updates.proveedor);
@@ -190,13 +218,31 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
     }
 
     const gasto = await models.gastos
-      .findByIdAndUpdate(req.params.id, { $set: { ...updates, updatedBy: user.userId } }, { new: true })
+      .findByIdAndUpdate(req.params.id, { $set: { ...updates, updatedBy: user.userId } }, { new: true, runValidators: true })
       .populate("creadoPor", "name email")
       .populate("updatedBy", "name email")
       .lean();
     if (!gasto) {
       res.status(404).json({ error: "Gasto not found" });
       return;
+    }
+    const changesFinancials = ["tipo", "categoria", "monto", "fecha", "proveedor", "libras", "valorPorLibra", "valorTotal"].some((key) => key in updates);
+    if (changesFinancials) {
+      await reverseFinancialMovements("gasto", String(gasto._id), user.userId);
+      await postFinancialMovement({
+        direccion: "egreso",
+        base: "devengado",
+        origen: "gasto",
+        origenId: String(gasto._id),
+        concepto: `gasto_operativo:${Date.now()}`,
+        categoria: String(gasto.categoria),
+        monto: Number(gasto.valorTotal || gasto.monto || 0),
+        estado: "confirmado",
+        fechaOperacion: gasto.fecha,
+        proveedorId: gasto.proveedorId,
+        creadoPor: user.userId,
+        metadata: { tipo: gasto.tipo, numeroFactura: gasto.numeroFactura, replacesPrevious: true },
+      });
     }
     res.status(200).json({ gasto });
   } catch (error) {
@@ -206,6 +252,8 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
 
 export async function deleteGasto(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
     const gasto = await models.gastos.findById(req.params.id).lean();
     if (!gasto) {
       res.status(404).json({ error: "Gasto not found" });
@@ -223,6 +271,7 @@ export async function deleteGasto(req: Request, res: Response, next: NextFunctio
       await deleteCloudinaryAsset(assetRef);
     }
 
+    await reverseFinancialMovements("gasto", String(gasto._id), user.userId);
     await models.gastos.findByIdAndDelete(req.params.id).lean();
     res.status(200).json({ message: "Gasto deleted" });
   } catch (error) {

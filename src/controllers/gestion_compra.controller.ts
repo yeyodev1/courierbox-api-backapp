@@ -3,6 +3,7 @@ import xlsx from "xlsx";
 import * as GestionCompraService from "../services/gestion_compra.service.js";
 import { uploadGestionCompraImagen } from "../services/upload.service.js";
 import { models } from "../models/index.js";
+import { htmlToPdf } from "../services/pdf.service.js";
 
 function getObjectIdString(value: unknown) {
   if (!value) return "";
@@ -22,7 +23,16 @@ function formatDateFilename(d: Date) {
 }
 
 function safeMoney(value: unknown) {
-  return Number(value || 0).toFixed(2);
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function getName(value: unknown): string {
@@ -67,7 +77,7 @@ function buildExportRows(gestiones: any[]) {
     const valorTotal = Number(g.valorTotal || 0);
     const comision = Number(g.valorComision || 0);
     const costoVenta = Number(g.costoVenta || 0);
-    const margenNeto = Math.max(0, valorTotal - comision - costoVenta);
+    const margenNeto = valorTotal - comision - costoVenta;
 
     return {
       Fecha: g.createdAt ? new Date(g.createdAt).toLocaleDateString("es-EC") : "—",
@@ -93,7 +103,20 @@ function buildExportRows(gestiones: any[]) {
   });
 }
 
-const ADMIN_ROLES = ["admin", "superadmin", "gerencia", "bodega"];
+const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
+
+function withoutFinancials(gestion: any) {
+  const {
+    valorTotal, valorReserva, valorPagado, costoVenta, valorComision, cuentaBancariaId,
+    feeConfigId, comprobantePagoUrl, pagoConfirmadoPor, ...safe
+  } = gestion;
+  return {
+    ...safe,
+    productos: Array.isArray(safe.productos)
+      ? safe.productos.map(({ valorUnitario, valorEnvio, ...producto }: any) => producto)
+      : safe.productos,
+  };
+}
 
 async function resolveUserIdentity(user: any) {
   const userId = String(user?.userId ?? user?.id ?? user?._id ?? "").trim();
@@ -157,7 +180,9 @@ export async function listGestiones(req: Request, res: Response, next: NextFunct
       año,
     });
 
-    res.json(result);
+    res.json(role === "bodega"
+      ? { ...result, gestiones: result.gestiones.map(withoutFinancials) }
+      : result);
   } catch (err) {
     next(err);
   }
@@ -186,6 +211,11 @@ export async function exportExcel(req: Request, res: Response, next: NextFunctio
 
     const rows = buildExportRows(gestiones);
     const ws = xlsx.utils.json_to_sheet(rows);
+    for (let row = 2; row <= rows.length + 1; row += 1) {
+      for (const column of ["I", "J", "K", "L", "M"]) {
+        if (ws[`${column}${row}`]) ws[`${column}${row}`].z = "$0.00";
+      }
+    }
 
     // Column widths
     const cols = [
@@ -289,19 +319,19 @@ export async function exportPdf(req: Request, res: Response, next: NextFunction)
     for (const r of rows) {
       html += `
         <tr>
-          <td>${r.Fecha}</td>
-          <td>${r.Codigo}</td>
-          <td>${r.Cliente}</td>
-          <td>${r.Asesor}</td>
-          <td>${r.Estado}</td>
-          <td>${r.Stage}</td>
+          <td>${escapeHtml(r.Fecha)}</td>
+          <td>${escapeHtml(r.Codigo)}</td>
+          <td>${escapeHtml(r.Cliente)}</td>
+          <td>${escapeHtml(r.Asesor)}</td>
+          <td>${escapeHtml(r.Estado)}</td>
+          <td>${escapeHtml(r.Stage)}</td>
           <td class="right">${r["Valor Total"]}</td>
           <td class="right">${r.Comision}</td>
           <td class="right">${r["Costo Venta"]}</td>
           <td class="right">${r["Margen Neto"]}</td>
           <td class="right">${r.Reserva}</td>
-          <td>${r.Pagina}</td>
-          <td>${r.Notas}</td>
+          <td>${escapeHtml(r.Pagina)}</td>
+          <td>${escapeHtml(r.Notas)}</td>
         </tr>`;
     }
 
@@ -320,9 +350,10 @@ export async function exportPdf(req: Request, res: Response, next: NextFunction)
     `;
 
     const filename = `gestiones_compra_${formatDateFilename(new Date())}.pdf`;
+    const pdf = await htmlToPdf(html);
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
-    res.send(html);
+    res.send(pdf);
   } catch (err) {
     next(err);
   }
@@ -338,6 +369,12 @@ export async function createGestion(req: Request, res: Response, next: NextFunct
       return;
     }
     const body = req.body;
+    const valorTotal = Number(body.valorTotal);
+    const valorReserva = Number(body.valorReserva ?? 0);
+    if (!Number.isFinite(valorTotal) || valorTotal < 0 || !Number.isFinite(valorReserva) || valorReserva < 0 || valorReserva > valorTotal) {
+      res.status(400).json({ error: "La reserva debe estar entre cero y el valor total" });
+      return;
+    }
 
     // If asesor, force asesorId to self
     const asesorId = ADMIN_ROLES.includes(role)
@@ -349,19 +386,26 @@ export async function createGestion(req: Request, res: Response, next: NextFunct
       return;
     }
 
+    const calculatedFee = ADMIN_ROLES.includes(role)
+      ? Number(body.valorComision ?? 0)
+      : (await GestionCompraService.calcularComisionPreview(valorTotal, body.feeConfigId)).valorComision;
     const gestion = await GestionCompraService.createGestionCompra({
       asesorId,
       contactoId: body.contactoId,
-      valorTotal: Number(body.valorTotal),
-      valorReserva: Number(body.valorReserva ?? 0),
+      valorTotal,
+      valorReserva,
       cuentaBancariaId: body.cuentaBancariaId,
-      costoVenta: Number(body.costoVenta ?? 0),
-      valorComision: Number(body.valorComision ?? 0),
+      costoVenta: ADMIN_ROLES.includes(role) ? Number(body.costoVenta ?? 0) : 0,
+      valorComision: calculatedFee,
       feeConfigId: body.feeConfigId,
       paginaCompra: body.paginaCompra,
       fechaEntregaTentativa: body.fechaEntregaTentativa,
       imagenCompraUrl: body.imagenCompraUrl,
       notas: body.notas,
+      tipoServicio: body.serviceType ?? body.tipoServicio,
+      prioridad: body.prioridad,
+      fechaLimiteCompra: body.fechaLimiteCompra,
+      productos: body.productos,
       createdByUserId: auth.userId,
       createdByUserName: auth.userName,
     });
@@ -383,7 +427,7 @@ export async function getStatsMensuales(req: Request, res: Response, next: NextF
     }
     const now = new Date();
     const año = parseInt(String(req.query.año ?? now.getFullYear()));
-    const mes = parseInt(String(req.query.mes ?? now.getMonth() + 1));
+    const mes = req.query.mes ? parseInt(String(req.query.mes)) : undefined;
     const asesorId = req.query.asesorId ? String(req.query.asesorId) : undefined;
 
     const targetAsesorId = ADMIN_ROLES.includes(role) ? (asesorId || undefined) : auth.userId;
@@ -405,7 +449,72 @@ export async function getByToken(req: Request, res: Response, next: NextFunction
   try {
     const gestion = await GestionCompraService.getGestionByViewToken(String(req.params.token));
     if (!gestion) return res.status(404).json({ error: "Gestión no encontrada" });
-    res.json({ gestion });
+    const contacto = typeof gestion.contactoId === "object" ? gestion.contactoId as any : null;
+    const asesor = typeof gestion.asesorId === "object" ? gestion.asesorId as any : null;
+    const envio = await models.enviosDomicilio.findOne({ gestionCompraId: gestion._id })
+      .select("modo estado guiaUrl fotoEntregaUrl firmaUrl entregadoEn recibidoPorNombre recibidoPorApellido")
+      .lean();
+    const evidenceBaseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}/view/${encodeURIComponent(String(req.params.token))}/evidence`;
+    res.json({
+      gestion: {
+        _id: String(gestion._id),
+        contactoId: { nombre: contacto?.nombre ?? "Cliente" },
+        asesorId: { name: asesor?.name ?? "Courier Box" },
+        valorTotal: gestion.valorTotal,
+        valorReserva: gestion.valorReserva,
+        paginaCompra: gestion.paginaCompra,
+        fechaEntregaTentativa: gestion.fechaEntregaTentativa,
+        imagenCompraUrl: gestion.imagenCompraUrl ? `${evidenceBaseUrl}/compra-principal` : "",
+        fotosRelacionadas: (gestion.fotosRelacionadas ?? []).map((foto: any, index: number) => ({
+          title: foto.title,
+          createdAt: foto.createdAt,
+          url: `${evidenceBaseUrl}/compra-${index}`,
+        })),
+        stage: gestion.stage,
+        estado: gestion.estado,
+        estadoPago: gestion.estadoPago ?? "pendiente",
+        estadoCompra: gestion.estadoCompra ?? "pendiente",
+        estadoBodega: gestion.estadoBodega ?? "pendiente",
+        estadoEntrega: gestion.estadoEntrega ?? "sin_envio",
+        pagoConfirmadoEn: gestion.pagoConfirmadoEn,
+        createdAt: gestion.createdAt,
+        updatedAt: gestion.updatedAt,
+        envio: envio ? {
+          modo: envio.modo,
+          estado: envio.estado,
+          guiaUrl: envio.guiaUrl,
+          fotoEntregaUrl: envio.fotoEntregaUrl ? `${evidenceBaseUrl}/foto` : "",
+          firmaUrl: envio.firmaUrl ? `${evidenceBaseUrl}/firma` : "",
+          entregadoEn: envio.entregadoEn,
+          recibidoPor: [envio.recibidoPorNombre, envio.recibidoPorApellido].filter(Boolean).join(" "),
+        } : null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getEvidenceByToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const gestion = await GestionCompraService.getGestionByViewToken(String(req.params.token));
+    if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada" });
+    const envio = await models.enviosDomicilio.findOne({ gestionCompraId: gestion._id }).select("fotoEntregaUrl firmaUrl").lean();
+    let source = req.params.type === "foto" ? envio?.fotoEntregaUrl : req.params.type === "firma" ? envio?.firmaUrl : "";
+    if (req.params.type === "compra-principal") source = gestion.imagenCompraUrl;
+    const galleryMatch = /^compra-(\d+)$/.exec(String(req.params.type));
+    if (galleryMatch) source = gestion.fotosRelacionadas?.[Number(galleryMatch[1])]?.url;
+    if (!source) return void res.status(404).json({ error: "Evidencia no encontrada" });
+    const sourceUrl = new URL(source);
+    if (sourceUrl.protocol !== "https:" || sourceUrl.hostname !== "res.cloudinary.com") {
+      return void res.status(400).json({ error: "Origen de evidencia no permitido" });
+    }
+    const upstream = await fetch(sourceUrl);
+    if (!upstream.ok) return void res.status(502).json({ error: "No se pudo recuperar la evidencia" });
+    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(Buffer.from(await upstream.arrayBuffer()));
   } catch (err) {
     next(err);
   }
@@ -423,12 +532,24 @@ export async function getGestion(req: Request, res: Response, next: NextFunction
     const gestion = await GestionCompraService.getGestionById(String(req.params.id));
     if (!gestion) return res.status(404).json({ error: "Gestión no encontrada" });
 
-    // Asesor can only see own
-    if (!ADMIN_ROLES.includes(role) && getObjectIdString(gestion.asesorId) !== auth.userId) {
+    // Bodega can inspect operational data; advisors can only inspect their own records.
+    if (role !== "bodega" && !ADMIN_ROLES.includes(role) && getObjectIdString(gestion.asesorId) !== auth.userId) {
       return res.status(403).json({ error: "Sin acceso a esta gestión" });
     }
-
-    res.json({ gestion });
+    const envio = await models.enviosDomicilio.findOne({ gestionCompraId: gestion._id })
+      .select("modo estado guiaUrl fotoEntregaUrl firmaUrl entregadoEn recibidoPorNombre recibidoPorApellido recibidoPorCedula bitacora")
+      .lean();
+    const operationIds = [gestion._id, ...(envio?._id ? [envio._id] : [])];
+    const notificaciones = await models.notificaciones.find({ operacionId: { $in: operationIds } })
+      .select("evento destinatario estado intentos providerId ultimoError enviadaEn createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+    const normalizedEnvio = envio ? {
+      ...envio,
+      recibidoPor: [envio.recibidoPorNombre, envio.recibidoPorApellido].filter(Boolean).join(" "),
+    } : null;
+    const detail = { ...gestion, envio: normalizedEnvio, notificaciones };
+    res.json({ gestion: role === "bodega" ? withoutFinancials(detail) : detail });
   } catch (err) {
     next(err);
   }
@@ -481,10 +602,70 @@ export async function confirmarReserva(req: Request, res: Response, next: NextFu
   }
 }
 
+export async function confirmarPago(req: Request, res: Response, next: NextFunction) {
+  try {
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth) return void res.status(401).json({ error: "Unauthorized" });
+    const gestion = await GestionCompraService.confirmarPago(String(req.params.id), Number(req.body.monto), auth.userId, auth.userName);
+    if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada o pago ya confirmado" });
+    res.json({ gestion });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function asignarComprador(req: Request, res: Response, next: NextFunction) {
+  try {
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth) return void res.status(401).json({ error: "Unauthorized" });
+    const gestion = await GestionCompraService.asignarComprador(String(req.params.id), String(req.body.compradorId || ""), auth.userId, auth.userName);
+    if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada" });
+    res.json({ gestion });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function marcarComprada(req: Request, res: Response, next: NextFunction) {
+  try {
+    const role = getRole(req.user);
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth || !role) return void res.status(401).json({ error: "Unauthorized" });
+    const existing = await GestionCompraService.getGestionById(String(req.params.id));
+    if (!existing) return void res.status(404).json({ error: "Gestión no encontrada" });
+    const isOwner = getObjectIdString(existing.asesorId) === auth.userId;
+    const isAssignedBuyer = getObjectIdString(existing.compradorAsignadoId) === auth.userId;
+    if (!ADMIN_ROLES.includes(role) && !isOwner && !isAssignedBuyer) {
+      return void res.status(403).json({ error: "Sin acceso a esta gestión" });
+    }
+    const gestion = await GestionCompraService.marcarComprada(String(req.params.id), String(req.body.numeroOrden || ""), auth.userId, auth.userName);
+    if (!gestion) return void res.status(409).json({ error: "La gestión no puede marcarse comprada en su estado actual" });
+    res.json({ gestion });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getBitacora(req: Request, res: Response, next: NextFunction) {
+  try {
+    const role = getRole(req.user);
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth || !role) return void res.status(401).json({ error: "Unauthorized" });
+    const gestion = await GestionCompraService.getGestionById(String(req.params.id));
+    if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada" });
+    if (role !== "bodega" && !ADMIN_ROLES.includes(role) && getObjectIdString(gestion.asesorId) !== auth.userId) {
+      return void res.status(403).json({ error: "Sin acceso a esta gestión" });
+    }
+    res.json({ bitacora: gestion.auditLog ?? [] });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /api/v1/gestiones-compra/:id/notificar (re-enviar)
 export async function reNotificar(req: Request, res: Response, next: NextFunction) {
   try {
-    await GestionCompraService.sendNotificacionCliente(String(req.params.id));
+    await GestionCompraService.sendNotificacionCliente(String(req.params.id), true);
     res.json({ ok: true, message: "Notificación reenviada" });
   } catch (err) {
     next(err);

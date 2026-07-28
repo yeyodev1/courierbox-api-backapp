@@ -6,6 +6,7 @@ import {
   createGestion,
   getStatsMensuales,
   getByToken,
+  getEvidenceByToken,
   getGestion,
   updateGestion,
   confirmarReserva,
@@ -15,6 +16,10 @@ import {
   recepcionBodega,
   exportExcel,
   exportPdf,
+  confirmarPago,
+  asignarComprador,
+  marcarComprada,
+  getBitacora,
 } from "../controllers/gestion_compra.controller.js";
 
 export const gestionCompraRouter = Router();
@@ -26,28 +31,33 @@ const adminOnly = requireRole(["admin", "gerencia", "superadmin"]);
 const bodegaAccess = requireRole(["admin", "gerencia", "superadmin", "bodega"]);
 
 // --- Public (no auth) ---
+gestionCompraRouter.get("/view/:token/evidence/:type", getEvidenceByToken);
 gestionCompraRouter.get("/view/:token", getByToken);
 
 // --- Auth required for all below ---
 gestionCompraRouter.use(requireAuth);
 
 // Stats + preview (before /:id to avoid conflicts)
-gestionCompraRouter.get("/stats/mensual", canAccess, getStatsMensuales);
+gestionCompraRouter.get("/stats/mensual", requireRole(["admin", "asesor", "gerencia", "superadmin"]), getStatsMensuales);
 gestionCompraRouter.get("/comision-preview", canAccess, comisionPreview);
-gestionCompraRouter.get("/export/excel", canAccess, exportExcel);
-gestionCompraRouter.get("/export/pdf", canAccess, exportPdf);
+gestionCompraRouter.get("/export/excel", requireRole(["admin", "asesor", "gerencia", "superadmin"]), exportExcel);
+gestionCompraRouter.get("/export/pdf", requireRole(["admin", "asesor", "gerencia", "superadmin"]), exportPdf);
 
 // Upload imagen (multipart)
 gestionCompraRouter.post("/upload-imagen", canAccess, upload.single("imagen"), uploadImagen);
 
 // CRUD
 gestionCompraRouter.get("/", canAccess, listGestiones);
-gestionCompraRouter.post("/", canAccess, createGestion);
+gestionCompraRouter.post("/", requireRole(["admin", "asesor", "gerencia", "superadmin"]), createGestion);
 gestionCompraRouter.get("/:id", canAccess, getGestion);
+gestionCompraRouter.get("/:id/bitacora", canAccess, getBitacora);
 gestionCompraRouter.patch("/:id", canAccess, updateGestion);
 
 // Admin actions
 gestionCompraRouter.post("/:id/confirmar-reserva", adminOnly, confirmarReserva);
+gestionCompraRouter.post("/:id/confirmar-pago", adminOnly, confirmarPago);
+gestionCompraRouter.post("/:id/asignar-comprador", adminOnly, asignarComprador);
+gestionCompraRouter.post("/:id/marcar-comprada", canAccess, marcarComprada);
 gestionCompraRouter.post("/:id/notificar", adminOnly, reNotificar);
 
 // Bodega: registrar recepción (fotos) y notificar al cliente

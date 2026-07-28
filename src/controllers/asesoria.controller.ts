@@ -16,7 +16,6 @@ import {
   shareOrder,
   unshareOrder,
   getOrderByViewToken,
-  markViewTokenUsed,
   resetViewToken,
   searchClientHistory,
 } from "../services/purchase_order.service";
@@ -507,10 +506,6 @@ export async function getOrderByToken(req: Request, res: Response, next: NextFun
 
     const wasAlreadyUsed = order.viewTokenUsed;
 
-    if (!wasAlreadyUsed) {
-      await markViewTokenUsed(token);
-    }
-
     res.status(200).json({
       order: {
         _id: order._id,
@@ -532,6 +527,13 @@ export async function getOrderByToken(req: Request, res: Response, next: NextFun
   } catch (error) {
     next(error);
   }
+}
+
+export function legacyOrderReadOnly(_req: Request, res: Response): void {
+  res.status(410).json({
+    error: "legacy_read_only",
+    message: "Esta orden es histórica y no puede modificarse. Las operaciones nuevas usan Gestión de Compra.",
+  });
 }
 
 // ─── RESET VIEW TOKEN ────────────────────────────────

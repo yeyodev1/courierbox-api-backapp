@@ -21,6 +21,7 @@ export interface IGasto extends Document {
   paqueteId?: mongoose.Types.ObjectId;
   creadoPor: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
+  idempotencyKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +52,7 @@ const gastoSchema = new Schema<IGasto>(
     paqueteId: { type: Schema.Types.ObjectId, ref: "Paquete" },
     creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    idempotencyKey: { type: String, sparse: true },
   },
   { timestamps: true }
 );
@@ -60,5 +62,6 @@ gastoSchema.index({ fecha: -1 });
 gastoSchema.index({ categoria: 1 });
 gastoSchema.index({ proveedor: 1, fecha: -1 });
 gastoSchema.index({ proveedorId: 1, fecha: -1 });
+gastoSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 export const Gasto = mongoose.model<IGasto>("Gasto", gastoSchema);

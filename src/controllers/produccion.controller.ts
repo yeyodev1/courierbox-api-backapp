@@ -12,7 +12,11 @@ export async function listProduccion(req: Request, res: Response, next: NextFunc
     if (desde || hasta) {
       query.fecha = {};
       if (desde) query.fecha.$gte = new Date(desde as string);
-      if (hasta) query.fecha.$lte = new Date(hasta as string);
+      if (hasta) {
+        const end = new Date(hasta as string);
+        end.setHours(23, 59, 59, 999);
+        query.fecha.$lte = end;
+      }
     }
     const take = Math.min(parseInt(limit as string) || 50, 200);
     const skip = parseInt(offset as string) || 0;

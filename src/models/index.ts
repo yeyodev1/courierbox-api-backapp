@@ -15,6 +15,8 @@ import { ProduccionDiaria } from "./produccion_diaria.model";
 import { Contacto } from "./contacto.model";
 import { CuentaBancaria } from "./cuenta_bancaria.model";
 import { GestionCompra } from "./gestion_compra.model";
+import { Notificacion } from "./notificacion.model";
+import { MovimientoFinanciero } from "./movimiento_financiero.model";
 
 export const models = {
   payments: Payment,
@@ -34,4 +36,6 @@ export const models = {
   contactos: Contacto,
   cuentasBancarias: CuentaBancaria,
   gestionesCompra: GestionCompra,
+  notificaciones: Notificacion,
+  movimientosFinancieros: MovimientoFinanciero,
 };

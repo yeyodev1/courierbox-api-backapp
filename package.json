@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "playwright:install": "playwright install chromium",
-    "providers:dedupe": "tsx src/scripts/dedupe-proveedores.ts"
+    "providers:dedupe": "tsx src/scripts/dedupe-proveedores.ts",
+    "purchases:migrate": "node -e \"console.error('Migracion masiva deshabilitada: PurchaseOrder convive como historico de solo lectura'); process.exit(1)\""
   },
   "dependencies": {
     "@sparticuz/chromium": "^148.0.0",

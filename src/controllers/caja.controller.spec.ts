@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   findOne: vi.fn(),
   create: vi.fn(),
+  postFinancialMovement: vi.fn(),
+}))
+
+vi.mock('../services/financial-movement.service', () => ({
+  postFinancialMovement: mocks.postFinancialMovement,
 }))
 
 vi.mock('../models/index', () => ({
@@ -25,6 +30,7 @@ function makeRes() {
 describe('createCaja', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.postFinancialMovement.mockResolvedValue({})
   })
 
   it('persists a valid master client id directly', async () => {

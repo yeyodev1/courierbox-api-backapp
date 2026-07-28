@@ -10,6 +10,13 @@ const mocks = vi.hoisted(() => ({
   proveedorCreate: vi.fn(),
   deleteCloudinaryAsset: vi.fn(),
   uploadGastoFactura: vi.fn(),
+  postFinancialMovement: vi.fn(),
+  reverseFinancialMovements: vi.fn(),
+}))
+
+vi.mock('../services/financial-movement.service', () => ({
+  postFinancialMovement: mocks.postFinancialMovement,
+  reverseFinancialMovements: mocks.reverseFinancialMovements,
 }))
 
 vi.mock('../models/index', () => ({
@@ -51,6 +58,8 @@ function makeRes() {
 describe('costos.controller', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.postFinancialMovement.mockResolvedValue({})
+    mocks.reverseFinancialMovements.mockResolvedValue(undefined)
     mocks.proveedorFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) })
   })
 
@@ -127,7 +136,7 @@ describe('costos.controller', () => {
         valorPorLibra: 1.99,
         valorTotal: 19.9,
       }),
-    }), { new: true })
+    }), { new: true, runValidators: true })
     expect(res.status).toHaveBeenCalledWith(200)
   })
 
@@ -147,7 +156,7 @@ describe('costos.controller', () => {
 
     expect(mocks.findByIdAndUpdate).toHaveBeenCalledWith('g1', expect.objectContaining({
       $set: expect.not.objectContaining({ valorTotal: expect.any(Number) }),
-    }), { new: true })
+    }), { new: true, runValidators: true })
   })
 
   it('resume gastos usando valorTotal cuando existe y monto como fallback', async () => {
@@ -184,7 +193,7 @@ describe('costos.controller', () => {
     })
     mocks.findByIdAndDelete.mockReturnValue({ lean: vi.fn().mockResolvedValue({}) })
 
-    const req = { params: { id: 'g1' } } as any
+    const req = { params: { id: 'g1' }, user: { userId: 'user-1', email: 'admin@example.com', role: 'admin' } } as any
     const res = makeRes() as any
 
     await deleteGasto(req, res, vi.fn())
@@ -206,7 +215,7 @@ describe('costos.controller', () => {
     })
     mocks.findByIdAndDelete.mockReturnValue({ lean: vi.fn().mockResolvedValue({}) })
 
-    const req = { params: { id: 'g2' } } as any
+    const req = { params: { id: 'g2' }, user: { userId: 'user-1', email: 'admin@example.com', role: 'admin' } } as any
     const res = makeRes() as any
 
     await deleteGasto(req, res, vi.fn())

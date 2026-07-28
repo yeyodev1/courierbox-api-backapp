@@ -15,7 +15,7 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
 
     const user = await models.users.findOne({ email: email.toLowerCase() });
     
-    if (!user) {
+    if (!user || user.activo === false) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
@@ -28,7 +28,12 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
     }
 
     const token = jwt.sign(
-      { userId: user._id, email: user.email, role: user.role },
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        tokenVersion: Number(user.tokenVersion ?? 0),
+      },
       env.JWT_SECRET,
       { expiresIn: "60d" }
     );
@@ -60,8 +65,8 @@ export async function me(req: Request, res: Response, next: NextFunction): Promi
 
     const user = await models.users.findById(userId).lean();
 
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
+    if (!user || user.activo === false) {
+      res.status(401).json({ error: "User is inactive or missing" });
       return;
     }
 
@@ -71,6 +76,7 @@ export async function me(req: Request, res: Response, next: NextFunction): Promi
         email: user.email,
         name: user.name,
         role: user.role,
+        activo: true,
       },
     });
   } catch (error) {
