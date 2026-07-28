@@ -190,6 +190,41 @@ export async function listGestiones(
   return { gestiones, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
+export async function listAllGestionesForExport(
+  role: string,
+  userId: string,
+  opts: {
+    estado?: string;
+    asesorId?: string;
+    mes?: number;
+    año?: number;
+  } = {}
+) {
+  const filter: Record<string, any> = {};
+
+  if (!ADMIN_ROLES.includes(role)) {
+    filter.asesorId = userId;
+  } else if (opts.asesorId) {
+    filter.asesorId = opts.asesorId;
+  }
+
+  if (opts.estado) filter.estado = opts.estado;
+
+  if (opts.mes !== undefined && opts.año !== undefined) {
+    const start = new Date(opts.año, opts.mes - 1, 1);
+    const end = new Date(opts.año, opts.mes, 1);
+    filter.createdAt = { $gte: start, $lt: end };
+  }
+
+  return models.gestionesCompra
+    .find(filter)
+    .sort({ createdAt: -1 })
+    .populate("contactoId", "nombre email telefono")
+    .populate("asesorId", "name email")
+    .populate("cuentaBancariaId", "banco numeroCuenta titular")
+    .lean();
+}
+
 export async function getGestionById(id: string) {
   return models.gestionesCompra
     .findById(id)
@@ -294,6 +329,7 @@ export async function getEstadisticasMensuales(
   sumaValorTotal: number;
   sumaComision: number;
   sumaCostoVenta: number;
+  sumaMargenNeto: number;
   porEstado: Record<string, number>;
 }> {
   const start = new Date(año, mes - 1, 1);
@@ -315,6 +351,19 @@ export async function getEstadisticasMensuales(
           sumaValorTotal: { $sum: "$valorTotal" },
           sumaComision: { $sum: "$valorComision" },
           sumaCostoVenta: { $sum: "$costoVenta" },
+          sumaMargenNeto: {
+            $sum: {
+              $max: [
+                0,
+                {
+                  $subtract: [
+                    { $subtract: ["$valorTotal", "$valorComision"] },
+                    "$costoVenta",
+                  ],
+                },
+              ],
+            },
+          },
         },
       },
     ]),
@@ -334,6 +383,7 @@ export async function getEstadisticasMensuales(
     sumaValorTotal: 0,
     sumaComision: 0,
     sumaCostoVenta: 0,
+    sumaMargenNeto: 0,
   };
 
   return {
@@ -341,6 +391,7 @@ export async function getEstadisticasMensuales(
     sumaValorTotal: result.sumaValorTotal,
     sumaComision: result.sumaComision,
     sumaCostoVenta: result.sumaCostoVenta,
+    sumaMargenNeto: result.sumaMargenNeto,
     porEstado: estadoMap,
   };
 }
