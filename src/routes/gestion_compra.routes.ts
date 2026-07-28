@@ -13,6 +13,8 @@ import {
   comisionPreview,
   uploadImagen,
   recepcionBodega,
+  exportExcel,
+  exportPdf,
 } from "../controllers/gestion_compra.controller.js";
 
 export const gestionCompraRouter = Router();
@@ -32,6 +34,8 @@ gestionCompraRouter.use(requireAuth);
 // Stats + preview (before /:id to avoid conflicts)
 gestionCompraRouter.get("/stats/mensual", canAccess, getStatsMensuales);
 gestionCompraRouter.get("/comision-preview", canAccess, comisionPreview);
+gestionCompraRouter.get("/export/excel", canAccess, exportExcel);
+gestionCompraRouter.get("/export/pdf", canAccess, exportPdf);
 
 // Upload imagen (multipart)
 gestionCompraRouter.post("/upload-imagen", canAccess, upload.single("imagen"), uploadImagen);
