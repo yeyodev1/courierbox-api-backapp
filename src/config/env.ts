@@ -32,11 +32,17 @@ const schema = z.object({
   SUPERADMIN_PASSWORD: z.string().min(1).default("123456789"),
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),
-  GHL_ACCESS_TOKEN: z.string().min(1, "GHL_ACCESS_TOKEN is required"),
+  // Courier Box no longer runs a CRM. The GHL metrics screen and its API client
+  // were removed; this stays optional only for the legacy outbound webhooks
+  // below, which no-op when their URLs are unset.
+  GHL_ACCESS_TOKEN: z.string().default(""),
 
   // --- CourierBridge Hub ---
   GHL_WEBHOOK_INVOICE_URL: z.string().default(""),
   GHL_WEBHOOK_COMPRA_URL: z.string().default(""),
+  // Courier Box's own WhatsApp line. There is no CRM or WhatsApp API here: the
+  // backend composes the message and builds a wa.me link to this number.
+  COURIER_WHATSAPP_NUMBER: z.string().default("13478248937"),
   CONTIFICO_API_URL: z.string().default("https://api.contifico.com/v1"),
   CONTIFICO_API_KEY: z.string().default(""),
   CONTIFICO_TOKEN: z.string().default(""),

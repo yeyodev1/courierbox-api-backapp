@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import mongoose from "mongoose";
 import { models } from "../models/index";
 import { similitud } from "./fuzzy.service";
 import { logger } from "../utils/logger";
@@ -199,6 +200,245 @@ async function matchClienteCached(
   }
 
   return { masterId: null, estado: "pendiente_validacion" };
+}
+
+/**
+ * Homologation.
+ *
+ * `matchClienteCached` can only match against master clients and aliases that
+ * already exist, and it never creates one. On a fresh database every row lands
+ * in `pendiente_validacion` with a null `masterClienteId`, and nothing
+ * downstream — invoicing, counter pickup — can touch those packages. These
+ * helpers close that loop: an operator resolves each unmatched name once, and
+ * the alias created here makes every later import match on its own.
+ */
+
+export interface PendienteGrupo {
+  /** Cleaned consignee name shared by the packages in this group. */
+  nombre: string;
+  paquetes: Array<{
+    _id: string;
+    wr: string;
+    sh: string;
+    trackingOriginal: string;
+    contenido: string;
+    pesoLb: number;
+    consigneeNombre: string;
+    createdAt: Date;
+  }>;
+  totalPaquetes: number;
+  totalPesoLb: number;
+  sugerencias: Array<{
+    masterId: string;
+    nombreOficial: string;
+    codigoCasillero: string;
+    cedulaRuc: string;
+    score: number;
+  }>;
+}
+
+/**
+ * Groups unmatched packages by cleaned name and ranks likely owners.
+ *
+ * Counts come from an aggregation over the whole collection, not from a sample:
+ * homologating a group touches every package with that name, so the number on
+ * screen has to be the number that will actually move.
+ */
+/**
+ * Filter for one consignee bucket, matching how the aggregation grouped them.
+ * The "SIN NOMBRE" bucket is the rows with no usable name at all, so it cannot
+ * be matched by that literal string.
+ */
+function filtroPorNombre(nombre: string): Record<string, unknown> {
+  const limpio = nombre.trim();
+  if (!limpio || limpio.toUpperCase() === "SIN NOMBRE") {
+    return {
+      $and: [
+        { $or: [{ consigneeLimpio: { $in: ["", null] } }, { consigneeLimpio: { $exists: false } }] },
+        { $or: [{ consigneeNombre: { $in: ["", null] } }, { consigneeNombre: { $exists: false } }] },
+      ],
+    };
+  }
+  const rx = new RegExp(`^${escapeRegex(limpio)}$`, "i");
+  return { $or: [{ consigneeLimpio: rx }, { consigneeNombre: rx }] };
+}
+
+export async function listarPendientesHomologacion(limitGrupos = 40): Promise<PendienteGrupo[]> {
+  const base = { estado: "pendiente_validacion" as const, masterClienteId: null };
+
+  const agregados = (await models.paquetes.aggregate([
+    { $match: base },
+    {
+      $group: {
+        _id: {
+          $toUpper: {
+            $trim: {
+              input: {
+                $ifNull: [
+                  { $cond: [{ $eq: ["$consigneeLimpio", ""] }, null, "$consigneeLimpio"] },
+                  { $ifNull: ["$consigneeNombre", "SIN NOMBRE"] },
+                ],
+              },
+            },
+          },
+        },
+        totalPaquetes: { $sum: 1 },
+        totalPesoLb: { $sum: { $ifNull: ["$pesoLb", 0] } },
+      },
+    },
+    { $sort: { totalPaquetes: -1 } },
+    { $limit: limitGrupos },
+  ])) as Array<{ _id: string; totalPaquetes: number; totalPesoLb: number }>;
+
+  const ordenados: PendienteGrupo[] = [];
+  for (const row of agregados) {
+    const nombre = row._id || "SIN NOMBRE";
+    // A readable sample per group; the counts above cover the full set.
+    const muestra = (await models.paquetes
+      .find({ ...base, ...filtroPorNombre(nombre) } as never)
+      .select("wr sh trackingOriginal contenido pesoLb consigneeNombre createdAt")
+      .sort({ createdAt: -1 })
+      .limit(12)
+      .lean()) as any[];
+
+    ordenados.push({
+      nombre,
+      totalPaquetes: row.totalPaquetes,
+      totalPesoLb: Number(row.totalPesoLb) || 0,
+      sugerencias: [],
+      paquetes: muestra.map((p) => ({
+        _id: String(p._id),
+        wr: p.wr,
+        sh: p.sh,
+        trackingOriginal: p.trackingOriginal,
+        contenido: p.contenido,
+        pesoLb: Number(p.pesoLb) || 0,
+        consigneeNombre: p.consigneeNombre,
+        createdAt: p.createdAt,
+      })),
+    });
+  }
+
+  const clientes = (await models.masterClientes
+    .find({}, "nombreOficial codigoCasillero cedulaRuc")
+    .lean()) as any[];
+
+  for (const grupo of ordenados) {
+    grupo.sugerencias = clientes
+      .map((c) => ({
+        masterId: String(c._id),
+        nombreOficial: c.nombreOficial ?? "",
+        codigoCasillero: c.codigoCasillero ?? "",
+        cedulaRuc: c.cedulaRuc ?? "",
+        score: similitud(grupo.nombre, String(c.nombreOficial ?? "").toUpperCase()),
+      }))
+      .filter((s) => s.score >= 0.55)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }
+
+  return ordenados;
+}
+
+export interface HomologarInput {
+  /** Explicit package ids, or every pending package sharing `nombre`. */
+  paqueteIds?: string[];
+  nombre?: string;
+  masterClienteId?: string;
+  nuevoCliente?: {
+    codigoCasillero: string;
+    nombreOficial: string;
+    cedulaRuc?: string;
+    email?: string;
+    telefono?: string;
+  };
+}
+
+export async function homologarPaquetes(input: HomologarInput) {
+  const badRequest = (message: string) => Object.assign(new Error(message), { status: 400 });
+
+  let masterId = input.masterClienteId;
+
+  if (!masterId) {
+    const nuevo = input.nuevoCliente;
+    if (!nuevo?.codigoCasillero?.trim() || !nuevo?.nombreOficial?.trim()) {
+      throw badRequest("Indica un cliente existente o el casillero y nombre del nuevo cliente");
+    }
+
+    const codigoCasillero = nuevo.codigoCasillero.trim().toUpperCase();
+
+    // The casillero is the unique key, so reuse rather than collide.
+    const existente = await models.masterClientes.findOne({ codigoCasillero }).lean();
+    if (existente) {
+      masterId = String((existente as any)._id);
+    } else {
+      // Guard the identity the proposal calls "validación estricta": one
+      // cédula/RUC must not spawn a second account.
+      const cedula = nuevo.cedulaRuc?.trim();
+      if (cedula) {
+        const porCedula = await models.masterClientes.findOne({ cedulaRuc: cedula }).lean();
+        if (porCedula) {
+          throw Object.assign(
+            new Error(
+              `Esa cédula/RUC ya pertenece a ${(porCedula as any).nombreOficial} (${(porCedula as any).codigoCasillero}). Vincula a ese cliente en vez de crear uno nuevo.`
+            ),
+            { status: 409 }
+          );
+        }
+      }
+
+      const creado = await models.masterClientes.create({
+        codigoCasillero,
+        nombreOficial: nuevo.nombreOficial.trim(),
+        cedulaRuc: cedula ?? "",
+        email: nuevo.email?.trim() ?? "",
+        telefono: nuevo.telefono?.trim() ?? "",
+      });
+      masterId = String(creado._id);
+    }
+  }
+
+  if (!mongoose.isValidObjectId(masterId)) throw badRequest("Cliente inválido");
+
+  const filtro: Record<string, unknown> = { estado: "pendiente_validacion", masterClienteId: null };
+  if (input.paqueteIds?.length) {
+    const ids = input.paqueteIds.filter((id) => mongoose.isValidObjectId(id));
+    if (!ids.length) throw badRequest("Ningún paquete válido en la selección");
+    filtro._id = { $in: ids };
+  } else if (input.nombre?.trim()) {
+    // Same bucket definition the listing used, so the operator homologates
+    // exactly the packages the screen counted.
+    Object.assign(filtro, filtroPorNombre(input.nombre));
+  } else {
+    throw badRequest("Indica los paquetes o el nombre a homologar");
+  }
+
+  const result = await models.paquetes.updateMany(filtro as never, {
+    $set: { masterClienteId: new mongoose.Types.ObjectId(masterId), estado: "validado" },
+  });
+
+  // Remember the spelling we just resolved so the next import matches by itself.
+  if (input.nombre?.trim()) {
+    const variacion = input.nombre.trim();
+    const yaExiste = await models.clienteAliases.findOne({
+      masterId: new mongoose.Types.ObjectId(masterId),
+      variacion: new RegExp(`^${escapeRegex(variacion)}$`, "i"),
+    });
+    if (!yaExiste) {
+      await models.clienteAliases.create({
+        masterId: new mongoose.Types.ObjectId(masterId),
+        variacion,
+        ultimaVezVisto: new Date(),
+      });
+    }
+  }
+
+  const cliente = await models.masterClientes.findById(masterId).lean();
+  return { homologados: result.modifiedCount, cliente };
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export interface EtlResult {

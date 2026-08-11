@@ -12,7 +12,6 @@ import { trackingRouter } from "./routes/tracking.routes";
 import { authRouter } from "./routes/auth.routes";
 import { paymentRouter } from "./routes/payment.routes";
 import userRouter from "./routes/user.routes";
-import { adminRouter } from "./routes/admin.routes";
 import { etlRouter } from "./routes/etl.routes";
 import { facturacionRouter } from "./routes/facturacion.routes";
 import { conciliacionRouter } from "./routes/conciliacion.routes";
@@ -29,6 +28,8 @@ import cajaRouter from "./routes/caja.routes";
 import produccionRouter from "./routes/produccion.routes";
 import reportesRouter from "./routes/reportes.routes";
 import notificacionRouter from "./routes/notificacion.routes";
+import retiroCounterRouter from "./routes/retiro_counter.routes";
+import solicitudCompraRouter from "./routes/solicitud_compra.routes";
 
 export function createApp() {
   const app = express();
@@ -76,7 +77,6 @@ export function createApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/payments", paymentRouter);
   app.use("/api/users", userRouter);
-  app.use("/api/admin", adminRouter);
   app.use("/api/v1/etl", etlRouter);
   app.use("/api/v1/facturacion", facturacionRouter);
   app.use("/api/v1/conciliacion", conciliacionRouter);
@@ -87,6 +87,8 @@ export function createApp() {
   app.use("/api/v1/produccion", produccionRouter);
   app.use("/api/v1/reportes", reportesRouter);
   app.use("/api/v1/notificaciones", notificacionRouter);
+  app.use("/api/v1/retiros-counter", retiroCounterRouter);
+  app.use("/api/v1/solicitudes-compra", solicitudCompraRouter);
   app.use("/api/v1/contactos", contactosRouter);
   app.use("/api/v1/contactos-cb", contactosCbRouter);
   app.use("/api/v1/cuentas-bancarias", cuentasBancariasRouter);

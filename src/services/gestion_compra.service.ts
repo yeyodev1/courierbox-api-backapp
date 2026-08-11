@@ -424,6 +424,8 @@ export async function confirmarPago(id: string, monto: number, userId: string, u
     await createAndSendNotification({
       evento: "pago_confirmado",
       destinatario: contacto.email,
+      destinatarioTelefono: contacto.telefono || "",
+      destinatarioNombre: contacto.nombre || "",
       operacionTipo: "gestion_compra",
       operacionId: id,
       payload: {
@@ -460,13 +462,15 @@ export async function marcarComprada(id: string, numeroOrden: string, userId: st
       $push: { auditLog: { timestamp: new Date(), action: "compra_realizada", userId, userName, notes: numeroOrden ? `Orden ${numeroOrden}` : "Compra realizada" } },
     },
     { new: true, runValidators: true }
-  ).populate("contactoId", "nombre email").lean();
+  ).populate("contactoId", "nombre email telefono").lean();
   if (!updated) return null;
   const contacto = updated.contactoId as any;
   if (contacto?.email) {
     await createAndSendNotification({
       evento: "compra_realizada",
       destinatario: contacto.email,
+      destinatarioTelefono: contacto.telefono || "",
+      destinatarioNombre: contacto.nombre || "",
       operacionTipo: "gestion_compra",
       operacionId: id,
       payload: {
@@ -595,6 +599,8 @@ export async function sendNotificacionCliente(gestionId: string, force = false):
     const notification = await createAndSendNotification({
       evento: "gestion_creada",
       destinatario: contacto.email,
+      destinatarioTelefono: contacto.telefono || "",
+      destinatarioNombre: contacto.nombre || "",
       operacionTipo: "gestion_compra",
       operacionId: String(gestion._id),
       force,
@@ -681,6 +687,8 @@ export async function registrarRecepcionBodega(
       await createAndSendNotification({
         evento: "recepcion_bodega",
         destinatario: contacto.email,
+        destinatarioTelefono: contacto.telefono || "",
+        destinatarioNombre: contacto.nombre || "",
         operacionTipo: "gestion_compra",
         operacionId: String(updated._id),
         payload: {

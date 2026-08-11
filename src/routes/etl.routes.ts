@@ -1,6 +1,12 @@
 import { Router } from "express";
 import multer from "multer";
-import { uploadExcel, getPendientes } from "../controllers/etl.controller";
+import {
+  uploadExcel,
+  getPendientes,
+  getPendientesHomologacion,
+  postHomologar,
+  buscarClientesMaster,
+} from "../controllers/etl.controller";
 import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -11,3 +17,6 @@ etlRouter.use(requireAuth);
 etlRouter.use(requireRole(["admin", "gerencia", "superadmin"]));
 etlRouter.post("/upload", upload.single("file"), uploadExcel);
 etlRouter.get("/pendientes", getPendientes);
+etlRouter.get("/homologacion", getPendientesHomologacion);
+etlRouter.get("/clientes-master", buscarClientesMaster);
+etlRouter.post("/homologar", postHomologar);

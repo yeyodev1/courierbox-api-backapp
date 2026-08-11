@@ -17,6 +17,8 @@ import { CuentaBancaria } from "./cuenta_bancaria.model";
 import { GestionCompra } from "./gestion_compra.model";
 import { Notificacion } from "./notificacion.model";
 import { MovimientoFinanciero } from "./movimiento_financiero.model";
+import { RetiroCounter } from "./retiro_counter.model";
+import { SolicitudCompra } from "./solicitud_compra.model";
 
 export const models = {
   payments: Payment,
@@ -38,4 +40,6 @@ export const models = {
   gestionesCompra: GestionCompra,
   notificaciones: Notificacion,
   movimientosFinancieros: MovimientoFinanciero,
+  retirosCounter: RetiroCounter,
+  solicitudesCompra: SolicitudCompra,
 };

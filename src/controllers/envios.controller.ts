@@ -233,6 +233,8 @@ export async function createEnvio(req: Request, res: Response, next: NextFunctio
       await createAndSendNotification({
         evento: "envio_en_camino",
         destinatario: clienteEmail,
+        destinatarioTelefono: clienteTelefono,
+        destinatarioNombre: clienteNombre,
         operacionTipo: "envio",
         operacionId: String(envio._id),
         idempotencyKey: `envio:${String(envio._id)}:envio_en_camino:creacion`,
@@ -344,6 +346,8 @@ export async function uploadEnvioArchivo(req: Request, res: Response, next: Next
       await createAndSendNotification({
         evento: "envio_en_camino",
         destinatario: (envio as any).clienteEmail,
+        destinatarioTelefono: (envio as any).clienteTelefono || "",
+        destinatarioNombre: (envio as any).clienteNombre || "",
         operacionTipo: "envio",
         operacionId: String((envio as any)._id),
         idempotencyKey: `envio:${String((envio as any)._id)}:envio_en_camino:guia:${upload.publicId}`,
@@ -476,6 +480,8 @@ export async function marcarEntregado(req: Request, res: Response, next: NextFun
       const notification = await createAndSendNotification({
         evento: "entrega_completada",
         destinatario: (envio as any).clienteEmail,
+        destinatarioTelefono: (envio as any).clienteTelefono || "",
+        destinatarioNombre: (envio as any).clienteNombre || "",
         operacionTipo: "envio",
         operacionId: String((envio as any)._id),
         payload: {

@@ -131,3 +131,31 @@ export async function uploadGastoFactura(buffer: Buffer): Promise<UploadResult> 
 export async function uploadGestionCompraImagen(buffer: Buffer): Promise<UploadResult> {
   return uploadBuffer(buffer, "courierbox/gestiones_compra");
 }
+
+export async function uploadFirmaCounter(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/counter/firmas");
+}
+
+export async function uploadComprobanteRetiro(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/counter/comprobantes");
+}
+
+/**
+ * Accepts the `data:image/png;base64,...` string a signature canvas produces.
+ * Rejects anything that is not a small PNG/JPEG so the endpoint can't be used
+ * as a generic file drop.
+ */
+export async function uploadFirmaDataUrl(dataUrl: string): Promise<UploadResult> {
+  // These are all bad client input, so they carry a 400 rather than surfacing
+  // as a generic server error.
+  const badRequest = (message: string) => Object.assign(new Error(message), { status: 400 });
+
+  const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl.trim());
+  if (!match) throw badRequest("Firma inválida: se esperaba un PNG o JPEG en base64");
+
+  const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+  if (buffer.length === 0) throw badRequest("Firma vacía");
+  if (buffer.length > 2 * 1024 * 1024) throw badRequest("Firma demasiado pesada (máximo 2 MB)");
+
+  return uploadFirmaCounter(buffer);
+}

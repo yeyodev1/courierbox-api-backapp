@@ -19,6 +19,15 @@ function serializeError(err: unknown): string {
   return String(err);
 }
 
+/** Reads an intentional HTTP status off a thrown error, if it carries one. */
+function readStatus(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const candidate = (err as Record<string, unknown>).status ?? (err as Record<string, unknown>).statusCode;
+  const status = Number(candidate);
+  if (!Number.isInteger(status) || status < 400 || status > 599) return null;
+  return status;
+}
+
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   const isDev = process.env.NODE_ENV !== "production";
 
@@ -37,6 +46,18 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   }
 
   const errorMessage = serializeError(err);
+
+  // Services signal expected failures with `Object.assign(new Error(...), { status })`.
+  // Without this, a 409 conflict or a 400 validation error reached the client as
+  // a generic 500 and the UI could not tell "you did something wrong" from
+  // "the server broke".
+  const explicitStatus = readStatus(err);
+  if (explicitStatus) {
+    if (explicitStatus >= 500) {
+      logger.error("[error] handled", { status: explicitStatus, err: errorMessage, path: req.path });
+    }
+    return res.status(explicitStatus).json({ error: errorMessage, message: errorMessage });
+  }
 
   if (isDev) {
     logger.error("[error] unhandled", { err: err instanceof Error ? err.stack : String(err) });

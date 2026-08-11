@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { env } from "../config/env";
+import { WHATSAPP_DISPLAY, whatsappLink } from "../config/contact";
 
 let resend: Resend | null = null;
 
@@ -497,5 +498,331 @@ Courier Box Logistics`,
     console.log(`[email] credentials sent to ${params.to}`);
   } catch (err) {
     console.error("[email] failed to send credentials:", err);
+  }
+}
+
+/** Acknowledges a self-service purchase request from the public site. */
+export async function sendSolicitudRecibida(params: {
+  to: string;
+  clienteNombre: string;
+  folio: string;
+  totalItems: number;
+  subtotal: number;
+  comisionEstimada: number;
+  totalEstimado: number;
+  items?: Array<{ titulo?: string; url?: string; cantidad?: number }>;
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  if (!params.to) return { success: false, error: "Solicitud sin correo" };
+
+  const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+
+  const filas = (params.items ?? [])
+    .map(
+      (i) => `
+        <tr>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a;">${escapeEmailHtml(i.titulo)}</td>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a; text-align:right; color:#aaa;">x${Number(i.cantidad) || 1}</td>
+        </tr>`
+    )
+    .join("");
+
+  try {
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: `Recibimos tu solicitud de compra #${params.folio}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background:#f57c00; padding:24px; border-radius:12px 12px 0 0;">
+            <h1 style="color:#fff; margin:0; font-size:1.5rem;">Solicitud recibida</h1>
+            <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:0.85rem;">Folio #${escapeEmailHtml(params.folio)}</p>
+          </div>
+          <div style="background:#1a1a1a; color:#e0e0e0; padding:24px; border-radius:0 0 12px 12px;">
+            <p>Hola <strong>${escapeEmailHtml(params.clienteNombre)}</strong>,</p>
+            <p>
+              Recibimos tu solicitud de <strong>${params.totalItems}</strong> producto(s).
+              Un asesor la revisa y te confirma disponibilidad y el total final.
+            </p>
+
+            ${
+              filas
+                ? `<table style="width:100%; border-collapse:collapse; margin:18px 0; font-size:0.85rem;"><tbody>${filas}</tbody></table>`
+                : ""
+            }
+
+            <div style="padding:14px 16px; background:#252525; border-radius:8px; border-left:3px solid #f57c00;">
+              <table style="width:100%; font-size:0.9rem;">
+                <tr><td style="color:#999; padding:4px 0;">Productos + envío en EE.UU.</td><td style="text-align:right;">${money(params.subtotal)}</td></tr>
+                <tr><td style="color:#999; padding:4px 0;">Comisión estimada</td><td style="text-align:right;">${money(params.comisionEstimada)}</td></tr>
+                <tr><td style="color:#fff; padding:8px 0 0; font-weight:bold;">Total estimado</td><td style="text-align:right; color:#f57c00; font-size:1.15rem; font-weight:bold; padding-top:8px;">${money(params.totalEstimado)}</td></tr>
+              </table>
+            </div>
+
+            <p style="color:#888; font-size:0.78rem; margin-top:14px;">
+              Es una estimación: no incluye el flete internacional a Ecuador ni impuestos aduaneros,
+              que dependen del peso y la categoría del producto.
+            </p>
+
+            <div style="text-align:center; margin:20px 0 4px;">
+              <a href="${safeEmailUrl(
+                whatsappLink(
+                  `Hola Courier Box, soy ${params.clienteNombre}. Envié la solicitud de compra #${params.folio} y quiero confirmarla.`
+                )
+              )}" style="background:#25D366; color:#fff; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                Confirmar por WhatsApp
+              </a>
+              <p style="color:#777; font-size:0.72rem; margin:8px 0 0;">${WHATSAPP_DISPLAY}</p>
+            </div>
+
+            <p style="color:#666; font-size:0.8rem; margin-top:24px;">Courier Box Logistics · courierboxlogistics.com</p>
+          </div>
+        </div>
+      `,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    console.log(`[email] solicitud ${params.folio} sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    console.error("[email] failed to send solicitud:", err);
+    return { success: false, error: emailError(err) };
+  }
+}
+
+/** Electronic invoice issued at the counter and synced to Contifico. */
+export async function sendFacturaEmitida(params: {
+  to: string;
+  clienteNombre: string;
+  numeroFactura: string;
+  codigoCasillero?: string;
+  pesoTotalLb: number;
+  totalFlete: number;
+  totalArancel: number;
+  totalIva: number;
+  totalGeneral: number;
+  pdfUrl?: string;
+  paquetes?: Array<{ referencia?: string; descripcion?: string; pesoLb?: number }>;
+  portalUrl?: string;
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  if (!params.to) return { success: false, error: "Cliente sin correo" };
+
+  const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+
+  const filas = (params.paquetes ?? [])
+    .map(
+      (p) => `
+        <tr>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a; color:#f57c00; font-weight:bold;">${escapeEmailHtml(p.referencia)}</td>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a;">${escapeEmailHtml(p.descripcion)}</td>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a; text-align:right; color:#aaa;">${(Number(p.pesoLb) || 0).toFixed(2)} lb</td>
+        </tr>`
+    )
+    .join("");
+
+  const linea = (label: string, valor: string, destacado = false) => `
+    <tr>
+      <td style="padding:6px 0; color:${destacado ? "#fff" : "#999"}; font-size:${destacado ? "1rem" : "0.85rem"};">${label}</td>
+      <td style="padding:6px 0; text-align:right; color:${destacado ? "#f57c00" : "#e0e0e0"}; font-weight:${destacado ? "bold" : "normal"}; font-size:${destacado ? "1.1rem" : "0.9rem"};">${valor}</td>
+    </tr>`;
+
+  try {
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: `Factura ${params.numeroFactura} · Courier Box`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background:#f57c00; padding:24px; border-radius:12px 12px 0 0;">
+            <h1 style="color:#fff; margin:0; font-size:1.5rem;">Tu factura está lista</h1>
+            <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:0.85rem;">
+              N° ${escapeEmailHtml(params.numeroFactura)}${params.codigoCasillero ? ` · Casillero ${escapeEmailHtml(params.codigoCasillero)}` : ""}
+            </p>
+          </div>
+          <div style="background:#1a1a1a; color:#e0e0e0; padding:24px; border-radius:0 0 12px 12px;">
+            <p>Hola <strong>${escapeEmailHtml(params.clienteNombre)}</strong>,</p>
+            <p>Emitimos la factura electrónica de tus paquetes en bodega.</p>
+
+            ${
+              filas
+                ? `<table style="width:100%; border-collapse:collapse; margin:18px 0; font-size:0.85rem;">
+                     <thead><tr>
+                       <th style="text-align:left; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; border-bottom:1px solid #333;">Referencia</th>
+                       <th style="text-align:left; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; border-bottom:1px solid #333;">Descripción</th>
+                       <th style="text-align:right; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; border-bottom:1px solid #333;">Peso</th>
+                     </tr></thead>
+                     <tbody>${filas}</tbody>
+                   </table>`
+                : ""
+            }
+
+            <table style="width:100%; border-collapse:collapse; margin:18px 0; padding:12px; background:#252525; border-radius:8px;">
+              ${linea(`Flete (${(Number(params.pesoTotalLb) || 0).toFixed(2)} lb)`, money(params.totalFlete))}
+              ${linea("Arancel", money(params.totalArancel))}
+              ${linea("IVA", money(params.totalIva))}
+              ${linea("Total a pagar", money(params.totalGeneral), true)}
+            </table>
+
+            ${
+              params.pdfUrl
+                ? `<div style="text-align:center; margin:20px 0;">
+                     <a href="${safeEmailUrl(params.pdfUrl)}" style="background:#f57c00; color:#fff; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                       Descargar factura (PDF)
+                     </a>
+                   </div>`
+                : ""
+            }
+
+            ${
+              params.portalUrl
+                ? `<div style="text-align:center; margin:12px 0;">
+                     <a href="${safeEmailUrl(params.portalUrl)}" style="border:1px solid #f57c00; color:#f57c00; padding:11px 24px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                       Pagar y coordinar retiro
+                     </a>
+                   </div>`
+                : ""
+            }
+
+            <div style="text-align:center; margin:16px 0 4px;">
+              <a href="${safeEmailUrl(
+                whatsappLink(
+                  `Hola Courier Box, soy ${params.clienteNombre}. Tengo una consulta sobre la factura ${params.numeroFactura}.`
+                )
+              )}" style="background:#25D366; color:#fff; padding:11px 24px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                Escríbenos por WhatsApp
+              </a>
+              <p style="color:#777; font-size:0.72rem; margin:8px 0 0;">${WHATSAPP_DISPLAY}</p>
+            </div>
+
+            <p style="color:#666; font-size:0.8rem; margin-top:24px;">Courier Box Logistics · courierboxlogistics.com</p>
+          </div>
+        </div>
+      `,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    console.log(`[email] factura ${params.numeroFactura} sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    console.error("[email] failed to send factura:", err);
+    return { success: false, error: emailError(err) };
+  }
+}
+
+/**
+ * Counter pickup receipt. Replaces the paper slip the client used to sign:
+ * they get the signed PDF plus the itemised list of what they took.
+ */
+export async function sendRetiroCounterComprobante(params: {
+  to: string;
+  clienteNombre: string;
+  folio: string;
+  totalPaquetes: number;
+  totalPesoLb: number;
+  totalValor: number;
+  comprobanteUrl?: string;
+  firmaUrl?: string;
+  retiradoPor?: string;
+  items?: Array<{ referencia?: string; descripcion?: string; pesoLb?: number }>;
+  portalUrl?: string;
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  if (!params.to) return { success: false, error: "Cliente sin correo" };
+
+  const fecha = new Date().toLocaleString("es-EC", { dateStyle: "long", timeStyle: "short" });
+
+  const itemsHtml = (params.items ?? [])
+    .map(
+      (item) => `
+        <tr>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a; color:#f57c00; font-weight:bold;">${escapeEmailHtml(item.referencia)}</td>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a;">${escapeEmailHtml(item.descripcion)}</td>
+          <td style="padding:8px 10px; border-bottom:1px solid #2a2a2a; text-align:right; color:#aaa;">${(Number(item.pesoLb) || 0).toFixed(2)} lb</td>
+        </tr>`
+    )
+    .join("");
+
+  const comprobanteBoton = params.comprobanteUrl
+    ? `<div style="text-align:center; margin:24px 0;">
+         <a href="${safeEmailUrl(params.comprobanteUrl)}" style="background:#f57c00; color:#fff; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+           Descargar comprobante firmado (PDF)
+         </a>
+       </div>`
+    : "";
+
+  // No CRM: the client reaches us by opening a prefilled chat on our own line.
+  const whatsappBoton = `
+    <div style="text-align:center; margin:16px 0 4px;">
+      <a href="${safeEmailUrl(
+        whatsappLink(
+          `Hola Courier Box, soy ${params.clienteNombre}. Tengo una consulta sobre mi retiro #${params.folio}.`
+        )
+      )}" style="background:#25D366; color:#fff; padding:11px 24px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+        Escríbenos por WhatsApp
+      </a>
+      <p style="color:#777; font-size:0.72rem; margin:8px 0 0;">${WHATSAPP_DISPLAY}</p>
+    </div>`;
+
+  const firmaHtml = params.firmaUrl
+    ? `<div style="margin:16px 0; text-align:center;">
+         <p style="color:#999; font-size:0.8rem; margin:0 0 6px;">Firma registrada</p>
+         <img src="${safeEmailUrl(params.firmaUrl)}" alt="Firma" style="max-width:240px; background:#fff; border-radius:8px; border:1px solid #333; padding:4px;" />
+       </div>`
+    : "";
+
+  try {
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject: `Comprobante de retiro #${params.folio} · Courier Box`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: #f57c00; padding: 24px; border-radius: 12px 12px 0 0;">
+            <h1 style="color:#fff; margin:0; font-size:1.5rem;">Retiro confirmado</h1>
+            <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:0.85rem;">Folio #${escapeEmailHtml(params.folio)} · ${escapeEmailHtml(fecha)}</p>
+          </div>
+          <div style="background:#1a1a1a; color:#e0e0e0; padding:24px; border-radius:0 0 12px 12px;">
+            <p>Hola <strong>${escapeEmailHtml(params.clienteNombre)}</strong>,</p>
+            <p>Confirmamos la entrega de <strong>${params.totalPaquetes}</strong> paquete(s) en nuestro counter${
+              params.retiradoPor && params.retiradoPor !== params.clienteNombre
+                ? `, retirados por <strong>${escapeEmailHtml(params.retiradoPor)}</strong>`
+                : ""
+            }.</p>
+
+            <table style="width:100%; border-collapse:collapse; margin:18px 0; font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th style="text-align:left; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; border-bottom:1px solid #333;">Referencia</th>
+                  <th style="text-align:left; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; border-bottom:1px solid #333;">Descripción</th>
+                  <th style="text-align:right; padding:8px 10px; color:#888; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; border-bottom:1px solid #333;">Peso</th>
+                </tr>
+              </thead>
+              <tbody>${itemsHtml}</tbody>
+            </table>
+
+            <div style="padding:12px 16px; background:#252525; border-radius:8px; border-left:3px solid #f57c00;">
+              <span style="color:#999; font-size:0.8rem;">Peso total</span>
+              <strong style="color:#f57c00; font-size:1.05rem; display:block;">${(Number(params.totalPesoLb) || 0).toFixed(2)} lb</strong>
+            </div>
+
+            ${comprobanteBoton}
+            ${whatsappBoton}
+            ${firmaHtml}
+
+            <p style="color:#666; font-size:0.8rem; margin-top:24px;">
+              Guarda este correo como respaldo de tu retiro. Courier Box Logistics · courierboxlogistics.com
+            </p>
+          </div>
+        </div>
+      `,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    console.log(`[email] retiro counter sent to ${params.to}`);
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    console.error("[email] failed to send retiro counter:", err);
+    return { success: false, error: emailError(err) };
   }
 }
