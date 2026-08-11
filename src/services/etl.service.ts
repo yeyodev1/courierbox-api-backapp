@@ -11,7 +11,17 @@ const PATRONES_LIMPIEZA = [
   /CLIENTE RETIRA EN BODEGA[^]*$/gi,
   /SIN COSTO DE IND AND OUT[^]*$/gi,
   /AUTORIZADO POR\s+\w+/gi,
+  // Consolidation notes travel in the same cell as the name. Left in, they made
+  // "LALLEZKA ZAVALA", "LALLEZKA ZAVALA *WR DIVIDIDO" and
+  // "LALLEZKA ZAVALA *WR PPAL WR825" read as three different people. Dropping
+  // them collapses ~950 of the ~2,900 distinct names in the current manifest.
+  /\*?\s*WR\s*(?:PPAL|PRINCIPAL|DIVIDIDO)\b[^]*/gi,
+  /\bWR\d{5,}\b/gi,
+  /\bGRUPO\b/gi,
 ];
+
+/** Warehouse range codes such as "00039 - 48324" are not names. */
+const PATRON_SOLO_NUMEROS = /^[\d\s\-]+$/;
 
 const PATRON_NOMBRE_PREFIJO = /^(.*?)\s{2,}/;
 
@@ -69,7 +79,62 @@ function limpiarNombreConsignee(raw: string): { nombreLimpio: string; notasExtra
     }
   }
 
+  // Leftover asterisks and doubled spaces otherwise split the same person into
+  // several groups on the homologation screen.
+  texto = texto.replace(/\*+/g, " ").replace(/\s{2,}/g, " ").trim();
+
+  if (PATRON_SOLO_NUMEROS.test(texto)) {
+    notas.push(texto);
+    texto = "";
+  }
+
   return { nombreLimpio: texto, notasExtraidas: notas.join(" | ") };
+}
+
+/**
+ * Recomputes `consigneeLimpio` for packages already imported, so the cleanup
+ * improvements above apply to the existing manifest without a re-import. The
+ * raw value stays in `consigneeNombre`, so this is always recomputable.
+ */
+export async function recalcularNombresLimpios(): Promise<{
+  revisados: number;
+  actualizados: number;
+  nombresAntes: number;
+  nombresDespues: number;
+}> {
+  const paquetes = await models.paquetes
+    .find({ masterClienteId: null })
+    .select("consigneeNombre consigneeLimpio")
+    .lean();
+
+  const antes = new Set<string>();
+  const despues = new Set<string>();
+  const ops: Array<{ updateOne: { filter: object; update: object } }> = [];
+
+  for (const p of paquetes as any[]) {
+    antes.add(String(p.consigneeLimpio || p.consigneeNombre || "").trim().toUpperCase());
+
+    const { nombreLimpio } = limpiarNombreConsignee(String(p.consigneeNombre ?? ""));
+    const { nombre } = detectarSubagency(nombreLimpio);
+    despues.add(nombre.trim().toUpperCase());
+
+    if (nombre !== p.consigneeLimpio) {
+      ops.push({ updateOne: { filter: { _id: p._id }, update: { $set: { consigneeLimpio: nombre } } } });
+    }
+  }
+
+  if (ops.length > 0) {
+    for (let i = 0; i < ops.length; i += 1000) {
+      await models.paquetes.bulkWrite(ops.slice(i, i + 1000));
+    }
+  }
+
+  return {
+    revisados: paquetes.length,
+    actualizados: ops.length,
+    nombresAntes: antes.size,
+    nombresDespues: despues.size,
+  };
 }
 
 function detectarSubagency(nombre: string): { nombre: string; subagencyId: string } {

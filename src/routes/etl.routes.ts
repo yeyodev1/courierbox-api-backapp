@@ -6,6 +6,7 @@ import {
   getPendientesHomologacion,
   postHomologar,
   buscarClientesMaster,
+  postRecalcularNombres,
 } from "../controllers/etl.controller";
 import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
@@ -20,3 +21,4 @@ etlRouter.get("/pendientes", getPendientes);
 etlRouter.get("/homologacion", getPendientesHomologacion);
 etlRouter.get("/clientes-master", buscarClientesMaster);
 etlRouter.post("/homologar", postHomologar);
+etlRouter.post("/recalcular-nombres", postRecalcularNombres);

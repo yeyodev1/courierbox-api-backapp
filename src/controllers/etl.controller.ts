@@ -1,5 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
-import { homologarPaquetes, listarPendientesHomologacion, procesarExcel } from "../services/etl.service";
+import {
+  homologarPaquetes,
+  listarPendientesHomologacion,
+  procesarExcel,
+  recalcularNombresLimpios,
+} from "../services/etl.service";
 import { models } from "../models/index";
 
 export async function uploadExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -32,6 +37,15 @@ export async function getPendientes(req: Request, res: Response, next: NextFunct
     res.status(200).json({ paquetes });
   } catch (err: any) {
     console.error("[etl.controller] pendientes error:", err.message);
+    next(err);
+  }
+}
+
+/** Re-runs the name cleanup over already-imported packages. */
+export async function postRecalcularNombres(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json(await recalcularNombresLimpios());
+  } catch (err) {
     next(err);
   }
 }
