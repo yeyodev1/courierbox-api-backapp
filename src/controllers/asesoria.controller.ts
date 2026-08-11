@@ -105,6 +105,29 @@ export async function getDefaultFeeConfigController(
   }
 }
 
+/** Renders a rule as one line, so the audit trail reads like "10% -> 8%". */
+function describirRegla(c: Partial<IFeeConfig> | undefined): string {
+  if (!c) return "—";
+  const money = (n?: number) => `$${(Number(n) || 0).toFixed(2)}`;
+  switch (c.ruleType) {
+    case "fixed":
+      return money(c.fixedAmount);
+    case "percentage":
+      return `${Number(c.percentage) || 0}%`;
+    case "fixed_plus_percentage":
+      return `${money(c.fixedAmount)} + ${Number(c.percentage) || 0}%`;
+    case "tiered":
+      return `${c.tiers?.length ?? 0} rango(s)`;
+    default:
+      return "—";
+  }
+}
+
+function autorDe(req: Request): { userId?: any; userName: string } {
+  const u = (req as any).user;
+  return { userId: u?.userId ?? u?.id, userName: u?.name || u?.email || "desconocido" };
+}
+
 export async function createFeeConfig(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { name, ruleType, fixedAmount, percentage, minAmount, maxAmount, tiers, currency } = req.body;
@@ -129,6 +152,17 @@ export async function createFeeConfig(req: Request, res: Response, next: NextFun
     const count = await models.feeConfigs.countDocuments();
     if (count === 0) configData.isDefault = true;
 
+    const autor = autorDe(req);
+    configData.historial = [
+      {
+        fecha: new Date(),
+        userId: autor.userId,
+        userName: autor.userName,
+        accion: "creada",
+        resumen: `Creada como ${describirRegla(configData)}`,
+      },
+    ] as any;
+
     const config = await models.feeConfigs.create(configData);
     res.status(201).json({ config });
   } catch (error) {
@@ -141,8 +175,46 @@ export async function updateFeeConfig(req: Request, res: Response, next: NextFun
     const id = String(req.params.id);
     const update: Partial<IFeeConfig> = { ...req.body };
     delete (update as any)._id;
+    delete (update as any).historial;
 
-    const config = await models.feeConfigs.findByIdAndUpdate(id, { $set: update }, { new: true }).lean();
+    // Snapshot the rule before overwriting it, so the change is reconstructable.
+    const previo = await models.feeConfigs.findById(id).lean();
+    if (!previo) {
+      res.status(404).json({ error: "Fee config not found" });
+      return;
+    }
+
+    const autor = autorDe(req);
+    const anterior = {
+      ruleType: previo.ruleType,
+      fixedAmount: previo.fixedAmount,
+      percentage: previo.percentage,
+      minAmount: previo.minAmount,
+      maxAmount: previo.maxAmount,
+      tiers: previo.tiers,
+      enabled: previo.enabled,
+    };
+    const despues = { ...anterior, ...update } as Partial<IFeeConfig>;
+
+    const config = await models.feeConfigs
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: update,
+          $push: {
+            historial: {
+              fecha: new Date(),
+              userId: autor.userId,
+              userName: autor.userName,
+              accion: "editada",
+              anterior,
+              resumen: `${describirRegla(previo)} -> ${describirRegla(despues)}`,
+            },
+          },
+        },
+        { new: true }
+      )
+      .lean();
     if (!config) {
       res.status(404).json({ error: "Fee config not found" });
       return;
@@ -156,8 +228,28 @@ export async function updateFeeConfig(req: Request, res: Response, next: NextFun
 export async function setDefaultFeeConfig(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const id = String(req.params.id);
+    const autor = autorDe(req);
     await models.feeConfigs.updateMany({}, { $set: { isDefault: false } });
-    const config = await models.feeConfigs.findByIdAndUpdate(id, { $set: { isDefault: true } }, { new: true }).lean();
+    const config = await models.feeConfigs
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: { isDefault: true },
+          // Which tariff is the default one decides what every public quote
+          // charges, so promoting one is itself an auditable event.
+          $push: {
+            historial: {
+              fecha: new Date(),
+              userId: autor.userId,
+              userName: autor.userName,
+              accion: "predeterminada",
+              resumen: "Marcada como tarifa predeterminada",
+            },
+          },
+        },
+        { new: true }
+      )
+      .lean();
     if (!config) {
       res.status(404).json({ error: "Fee config not found" });
       return;

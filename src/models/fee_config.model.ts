@@ -9,6 +9,30 @@ export interface IFeeTier {
   percentage?: number;
 }
 
+/**
+ * One entry per change to the tariff. Commission is money the client is quoted,
+ * so "who set 8% and when, and what was it before" has to be answerable — the
+ * timestamps alone only ever showed the latest value.
+ */
+export interface IFeeConfigCambio {
+  fecha: Date;
+  userId?: mongoose.Types.ObjectId;
+  userName: string;
+  accion: "creada" | "editada" | "predeterminada" | "habilitada" | "deshabilitada";
+  /** The rule as it stood before this change. Empty on creation. */
+  anterior?: {
+    ruleType?: FeeRuleType;
+    fixedAmount?: number;
+    percentage?: number;
+    minAmount?: number;
+    maxAmount?: number;
+    tiers?: IFeeTier[];
+    enabled?: boolean;
+  };
+  /** Human-readable summary, e.g. "10% -> 8%". */
+  resumen: string;
+}
+
 export interface IFeeConfig extends Document {
   name: string;
   isDefault: boolean;
@@ -20,6 +44,7 @@ export interface IFeeConfig extends Document {
   maxAmount?: number;
   tiers?: IFeeTier[];
   enabled: boolean;
+  historial: IFeeConfigCambio[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +55,22 @@ const feeTierSchema = new Schema<IFeeTier>(
     to: { type: Number, required: true },
     fixedAmount: { type: Number, default: 0 },
     percentage: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const feeConfigCambioSchema = new Schema<IFeeConfigCambio>(
+  {
+    fecha: { type: Date, default: () => new Date() },
+    userId: { type: Schema.Types.ObjectId, ref: "User" },
+    userName: { type: String, default: "" },
+    accion: {
+      type: String,
+      enum: ["creada", "editada", "predeterminada", "habilitada", "deshabilitada"],
+      required: true,
+    },
+    anterior: { type: Schema.Types.Mixed },
+    resumen: { type: String, default: "" },
   },
   { _id: false }
 );
@@ -51,6 +92,7 @@ const feeConfigSchema = new Schema<IFeeConfig>(
     maxAmount: { type: Number, default: 0 },
     tiers: { type: [feeTierSchema], default: [] },
     enabled: { type: Boolean, default: true },
+    historial: { type: [feeConfigCambioSchema], default: [] },
   },
   { timestamps: true, versionKey: false }
 );
