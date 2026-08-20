@@ -26,6 +26,7 @@ import { contactosCbRouter } from "./routes/contactos_cb.routes";
 import { cuentasBancariasRouter } from "./routes/cuentas_bancarias.routes";
 import cajaRouter from "./routes/caja.routes";
 import produccionRouter from "./routes/produccion.routes";
+import ventasProductoRouter from "./routes/ventas_producto.routes";
 import reportesRouter from "./routes/reportes.routes";
 import notificacionRouter from "./routes/notificacion.routes";
 import retiroCounterRouter from "./routes/retiro_counter.routes";
@@ -85,6 +86,7 @@ export function createApp() {
   app.use("/api/v1/envios", enviosRouter);
   app.use("/api/v1/caja", cajaRouter);
   app.use("/api/v1/produccion", produccionRouter);
+  app.use("/api/v1/ventas-productos", ventasProductoRouter);
   app.use("/api/v1/reportes", reportesRouter);
   app.use("/api/v1/notificaciones", notificacionRouter);
   app.use("/api/v1/retiros-counter", retiroCounterRouter);
