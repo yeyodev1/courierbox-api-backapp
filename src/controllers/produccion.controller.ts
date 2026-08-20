@@ -37,7 +37,7 @@ export async function createProduccion(req: Request, res: Response, next: NextFu
     const user = getUser(req);
     if (!user) return void res.status(401).json({ error: "Unauthorized" });
 
-    const { fecha, supervisorNombre, ventaCourier, ventaGestionCompra, ventaVentas, facturado, clientesNuevos, notas } = req.body;
+    const { fecha, supervisorNombre, ventaCourier, ventaGestionCompra, ventaVentas, facturado, clientesNuevos, libras, notas } = req.body;
 
     const courier = Math.max(Number(ventaCourier) || 0, 0);
     const gestionCompra = Math.max(Number(ventaGestionCompra) || 0, 0);
@@ -55,6 +55,7 @@ export async function createProduccion(req: Request, res: Response, next: NextFu
       ventaVentas: ventas,
       facturado: total,
       clientesNuevos: Number(clientesNuevos) || 0,
+      libras: Math.max(Number(libras) || 0, 0),
       notas: notas || "",
       creadoPor: user.userId,
     });
@@ -76,15 +77,62 @@ export async function resumenProduccion(_req: Request, res: Response, next: Next
           ventaCourier: { $sum: { $ifNull: ["$ventaCourier", 0] } },
           ventaGestionCompra: { $sum: { $ifNull: ["$ventaGestionCompra", 0] } },
           ventaVentas: { $sum: { $ifNull: ["$ventaVentas", 0] } },
+          libras: { $sum: { $ifNull: ["$libras", 0] } },
           clientesNuevos: { $sum: "$clientesNuevos" },
           dias: { $sum: 1 },
         },
       },
     ]);
     const resumen = rows[0] || {
-      facturado: 0, ventaCourier: 0, ventaGestionCompra: 0, ventaVentas: 0, clientesNuevos: 0, dias: 0,
+      facturado: 0, ventaCourier: 0, ventaGestionCompra: 0, ventaVentas: 0, libras: 0, clientesNuevos: 0, dias: 0,
     };
     res.status(200).json({ resumen });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Month-by-month contrast: pounds and billing grouped by calendar month, most
+ * recent first, each row carrying its delta vs. the previous month.
+ */
+export async function comparativoMensual(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const meses = Math.min(Math.max(parseInt(req.query.meses as string) || 12, 1), 36);
+    const rows = await models.produccionDiaria.aggregate([
+      {
+        $group: {
+          _id: { anio: { $year: "$fecha" }, mes: { $month: "$fecha" } },
+          libras: { $sum: { $ifNull: ["$libras", 0] } },
+          facturado: { $sum: { $ifNull: ["$facturado", 0] } },
+          clientesNuevos: { $sum: { $ifNull: ["$clientesNuevos", 0] } },
+          dias: { $sum: 1 },
+        },
+      },
+      { $sort: { "_id.anio": 1, "_id.mes": 1 } },
+    ]);
+
+    const meic = rows.map((r) => ({
+      anio: r._id.anio,
+      mes: r._id.mes,
+      libras: r.libras,
+      facturado: r.facturado,
+      clientesNuevos: r.clientesNuevos,
+      dias: r.dias,
+    }));
+
+    // Attach month-over-month deltas while data is still oldest-first…
+    const withDelta = meic.map((row, i) => {
+      const prev = meic[i - 1];
+      const librasPrev = prev ? prev.libras : 0;
+      const deltaLibras = row.libras - librasPrev;
+      const deltaPct = librasPrev > 0 ? (deltaLibras / librasPrev) * 100 : null;
+      return { ...row, deltaLibras, deltaPct };
+    });
+
+    // …then return newest-first, capped to the requested window.
+    const items = withDelta.reverse().slice(0, meses);
+    res.status(200).json({ items });
   } catch (error) {
     next(error);
   }
