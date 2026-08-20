@@ -826,3 +826,106 @@ export async function sendRetiroCounterComprobante(params: {
     return { success: false, error: emailError(err) };
   }
 }
+
+interface VentaProductoEmailData {
+  vendedorNombre: string;
+  clienteNombre: string;
+  productoNombre: string;
+  cantidad: number;
+  precioUnitario: number;
+  subtotal: number;
+  valorEnvio: number;
+  total: number;
+  metodoEntrega: string;
+  metodoPago: string;
+  pagoConfirmado: boolean;
+  esCredito: boolean;
+  abono: number;
+  saldo: number;
+  cuotas: { fecha: Date; monto: number }[];
+  observacion: string;
+  /** Internal figures — included in the admin mail only. */
+  costoTotal?: number;
+  comisionTotal?: number;
+}
+
+function ventaRow(label: string, value: string, alt = false): string {
+  return `<tr style="background:${alt ? "#252525" : "transparent"}"><td style="padding:8px;color:#999;width:170px">${escapeEmailHtml(label)}</td><td style="padding:8px"><strong>${escapeEmailHtml(value)}</strong></td></tr>`;
+}
+
+function cuotasHtml(cuotas: { fecha: Date; monto: number }[]): string {
+  if (!cuotas.length) return "";
+  const rows = cuotas
+    .map(
+      (c) =>
+        `<tr><td style="padding:6px 8px;color:#ccc">${new Date(c.fecha).toLocaleDateString("es-EC")}</td><td style="padding:6px 8px;text-align:right"><strong>$${(Number(c.monto) || 0).toFixed(2)}</strong></td></tr>`
+    )
+    .join("");
+  return `<h3 style="color:#f57c00;margin:16px 0 8px">Plan de pago a crédito</h3><table style="width:100%;border-collapse:collapse;background:#1f1b17;border-radius:8px">${rows}</table>`;
+}
+
+const entregaLabel = (m: string) => (m === "envio" ? "Envío a domicilio" : "Retiro en oficina");
+
+/** Full sale detail for the admin, cost and commission included. */
+export async function sendVentaProductoAdmin(data: VentaProductoEmailData): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+    const rows =
+      ventaRow("Vendedor", data.vendedorNombre) +
+      ventaRow("Cliente", data.clienteNombre, true) +
+      ventaRow("Producto", `${data.productoNombre} × ${data.cantidad}`) +
+      ventaRow("Precio unitario", money(data.precioUnitario), true) +
+      ventaRow("Subtotal", money(data.subtotal)) +
+      ventaRow("Entrega", entregaLabel(data.metodoEntrega), true) +
+      ventaRow("Valor de envío", money(data.valorEnvio)) +
+      ventaRow("Método de pago", `${data.metodoPago}${data.pagoConfirmado ? " (confirmado)" : " (pendiente)"}`, true) +
+      (data.esCredito ? ventaRow("Abono / Saldo", `${money(data.abono)} / ${money(data.saldo)}`) : "") +
+      ventaRow("Costo total", money(data.costoTotal || 0), true) +
+      ventaRow("Comisión total", money(data.comisionTotal || 0)) +
+      ventaRow("TOTAL", money(data.total), true) +
+      (data.observacion ? ventaRow("Observación", data.observacion) : "");
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: env.ADMIN_EMAIL,
+      subject: `Nueva venta de producto — ${data.clienteNombre} (${money(data.total)})`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto"><div style="background:#f57c00;padding:20px;border-radius:12px 12px 0 0"><h1 style="color:#fff;margin:0;font-size:1.35rem">Venta de producto registrada</h1></div><div style="background:#1a1a1a;color:#e0e0e0;padding:24px;border-radius:0 0 12px 12px"><table style="width:100%;border-collapse:collapse;margin-bottom:8px">${rows}</table>${cuotasHtml(data.cuotas)}</div></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}
+
+/** Client-facing summary. Cost and commission are intentionally omitted. */
+export async function sendVentaProductoCliente(
+  to: string,
+  data: VentaProductoEmailData
+): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+    const rows =
+      ventaRow("Producto", `${data.productoNombre} × ${data.cantidad}`) +
+      ventaRow("Precio unitario", money(data.precioUnitario), true) +
+      ventaRow("Subtotal", money(data.subtotal)) +
+      ventaRow("Entrega", entregaLabel(data.metodoEntrega), true) +
+      ventaRow("Valor de envío", money(data.valorEnvio)) +
+      ventaRow("Método de pago", data.metodoPago, true) +
+      (data.esCredito ? ventaRow("Abono / Saldo pendiente", `${money(data.abono)} / ${money(data.saldo)}`) : "") +
+      ventaRow("TOTAL", money(data.total), true);
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to,
+      subject: "Resumen de tu compra — Courier Box",
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto"><div style="background:#f57c00;padding:20px;border-radius:12px 12px 0 0"><h1 style="color:#fff;margin:0;font-size:1.35rem">Gracias por tu compra</h1></div><div style="background:#1a1a1a;color:#e0e0e0;padding:24px;border-radius:0 0 12px 12px"><p>Hola <strong>${escapeEmailHtml(data.clienteNombre)}</strong>, este es el resumen de tu compra:</p><table style="width:100%;border-collapse:collapse;margin-bottom:8px">${rows}</table>${cuotasHtml(data.cuotas)}<p style="color:#999;font-size:.85rem;margin-top:16px">Si tienes dudas, contáctanos.</p></div></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}
