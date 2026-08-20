@@ -19,6 +19,8 @@ import { Notificacion } from "./notificacion.model";
 import { MovimientoFinanciero } from "./movimiento_financiero.model";
 import { RetiroCounter } from "./retiro_counter.model";
 import { SolicitudCompra } from "./solicitud_compra.model";
+import { ProductoInventario } from "./producto_inventario.model";
+import { VentaProducto } from "./venta_producto.model";
 
 export const models = {
   payments: Payment,
@@ -42,4 +44,6 @@ export const models = {
   movimientosFinancieros: MovimientoFinanciero,
   retirosCounter: RetiroCounter,
   solicitudesCompra: SolicitudCompra,
+  productosInventario: ProductoInventario,
+  ventasProducto: VentaProducto,
 };
