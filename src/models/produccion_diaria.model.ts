@@ -7,6 +7,8 @@ export interface IProduccionDiaria extends Document {
   ventaCourier: number;
   ventaGestionCompra: number;
   ventaVentas: number;
+  /** Physical volume handled that day, in pounds. */
+  libras: number;
   /** Total billed for the day — the sum of the three lines above. */
   facturado: number;
   clientesNuevos: number;
@@ -23,6 +25,7 @@ const produccionDiariaSchema = new Schema<IProduccionDiaria>(
     ventaCourier: { type: Number, default: 0, min: 0 },
     ventaGestionCompra: { type: Number, default: 0, min: 0 },
     ventaVentas: { type: Number, default: 0, min: 0 },
+    libras: { type: Number, default: 0, min: 0 },
     facturado: { type: Number, default: 0, min: 0 },
     clientesNuevos: { type: Number, default: 0, min: 0 },
     notas: { type: String, default: "" },
