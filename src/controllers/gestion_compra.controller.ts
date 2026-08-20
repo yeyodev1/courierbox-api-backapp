@@ -170,6 +170,7 @@ export async function listGestiones(req: Request, res: Response, next: NextFunct
     const asesorId = req.query.asesorId ? String(req.query.asesorId) : undefined;
     const mes = req.query.mes ? parseInt(String(req.query.mes)) : undefined;
     const año = req.query.año ? parseInt(String(req.query.año)) : undefined;
+    const q = req.query.q ? String(req.query.q) : undefined;
 
     const result = await GestionCompraService.listGestiones(role, auth.userId, {
       page,
@@ -178,6 +179,7 @@ export async function listGestiones(req: Request, res: Response, next: NextFunct
       asesorId: ADMIN_ROLES.includes(role) ? asesorId : undefined,
       mes,
       año,
+      q,
     });
 
     res.json(role === "bodega"
@@ -201,12 +203,14 @@ export async function exportExcel(req: Request, res: Response, next: NextFunctio
     const asesorId = req.query.asesorId ? String(req.query.asesorId) : undefined;
     const mes = req.query.mes ? parseInt(String(req.query.mes)) : undefined;
     const año = req.query.año ? parseInt(String(req.query.año)) : undefined;
+    const q = req.query.q ? String(req.query.q) : undefined;
 
     const gestiones = await GestionCompraService.listAllGestionesForExport(role, auth.userId, {
       estado,
       asesorId: ADMIN_ROLES.includes(role) ? asesorId : undefined,
       mes,
       año,
+      q,
     });
 
     const rows = buildExportRows(gestiones);
@@ -252,12 +256,14 @@ export async function exportPdf(req: Request, res: Response, next: NextFunction)
     const asesorId = req.query.asesorId ? String(req.query.asesorId) : undefined;
     const mes = req.query.mes ? parseInt(String(req.query.mes)) : undefined;
     const año = req.query.año ? parseInt(String(req.query.año)) : undefined;
+    const q = req.query.q ? String(req.query.q) : undefined;
 
     const gestiones = await GestionCompraService.listAllGestionesForExport(role, auth.userId, {
       estado,
       asesorId: ADMIN_ROLES.includes(role) ? asesorId : undefined,
       mes,
       año,
+      q,
     });
 
     const rows = buildExportRows(gestiones);
@@ -429,13 +435,15 @@ export async function getStatsMensuales(req: Request, res: Response, next: NextF
     const año = parseInt(String(req.query.año ?? now.getFullYear()));
     const mes = req.query.mes ? parseInt(String(req.query.mes)) : undefined;
     const asesorId = req.query.asesorId ? String(req.query.asesorId) : undefined;
+    const q = req.query.q ? String(req.query.q) : undefined;
 
     const targetAsesorId = ADMIN_ROLES.includes(role) ? (asesorId || undefined) : auth.userId;
 
     const stats = await GestionCompraService.getEstadisticasMensuales(
       año,
       mes,
-      targetAsesorId
+      targetAsesorId,
+      q
     );
 
     res.json(stats);

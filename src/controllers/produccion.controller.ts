@@ -37,11 +37,23 @@ export async function createProduccion(req: Request, res: Response, next: NextFu
     const user = getUser(req);
     if (!user) return void res.status(401).json({ error: "Unauthorized" });
 
-    const { fecha, supervisorNombre, facturado, clientesNuevos, notas } = req.body;
+    const { fecha, supervisorNombre, ventaCourier, ventaGestionCompra, ventaVentas, facturado, clientesNuevos, notas } = req.body;
+
+    const courier = Math.max(Number(ventaCourier) || 0, 0);
+    const gestionCompra = Math.max(Number(ventaGestionCompra) || 0, 0);
+    const ventas = Math.max(Number(ventaVentas) || 0, 0);
+    const desglose = courier + gestionCompra + ventas;
+    // The three lines are the source of truth; `facturado` only stands in when a
+    // caller still posts the old single-total shape.
+    const total = desglose > 0 ? desglose : Math.max(Number(facturado) || 0, 0);
+
     const item = await models.produccionDiaria.create({
       fecha: fecha ? new Date(fecha) : new Date(),
       supervisorNombre: supervisorNombre || user.email,
-      facturado: Number(facturado) || 0,
+      ventaCourier: courier,
+      ventaGestionCompra: gestionCompra,
+      ventaVentas: ventas,
+      facturado: total,
       clientesNuevos: Number(clientesNuevos) || 0,
       notas: notas || "",
       creadoPor: user.userId,
@@ -54,14 +66,25 @@ export async function createProduccion(req: Request, res: Response, next: NextFu
 
 export async function resumenProduccion(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const [last30] = await Promise.all([
-      models.produccionDiaria.aggregate([
-        { $sort: { fecha: -1 } },
-        { $limit: 30 },
-        { $group: { _id: null, facturado: { $sum: "$facturado" }, clientesNuevos: { $sum: "$clientesNuevos" }, dias: { $sum: 1 } } },
-      ]),
+    const rows = await models.produccionDiaria.aggregate([
+      { $sort: { fecha: -1 } },
+      { $limit: 30 },
+      {
+        $group: {
+          _id: null,
+          facturado: { $sum: "$facturado" },
+          ventaCourier: { $sum: { $ifNull: ["$ventaCourier", 0] } },
+          ventaGestionCompra: { $sum: { $ifNull: ["$ventaGestionCompra", 0] } },
+          ventaVentas: { $sum: { $ifNull: ["$ventaVentas", 0] } },
+          clientesNuevos: { $sum: "$clientesNuevos" },
+          dias: { $sum: 1 },
+        },
+      },
     ]);
-    res.status(200).json({ resumen: last30 || { facturado: 0, clientesNuevos: 0, dias: 0 } });
+    const resumen = rows[0] || {
+      facturado: 0, ventaCourier: 0, ventaGestionCompra: 0, ventaVentas: 0, clientesNuevos: 0, dias: 0,
+    };
+    res.status(200).json({ resumen });
   } catch (error) {
     next(error);
   }

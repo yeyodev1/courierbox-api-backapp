@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { models } from "../models/index";
 import type { IPurchaseOrder, ServiceType } from "../models/purchase_order.model";
 
@@ -95,10 +96,14 @@ export async function getAsesorStats(asesorId?: string): Promise<{
   recentOrders: IPurchaseOrder[];
 }> {
   const query: Record<string, any> = asesorId ? { asesorId } : {};
+  // aggregate() no castea el string a ObjectId como find()/countDocuments(); sin
+  // esto el $match no coincide y totalSold sale en 0 al filtrar por asesor.
+  const aggQuery: Record<string, any> =
+    asesorId && Types.ObjectId.isValid(asesorId) ? { asesorId: new Types.ObjectId(asesorId) } : {};
   const [totalOrders, pendingPayment, totalSoldAgg, recentOrders] = await Promise.all([
     models.purchaseOrders.countDocuments(query),
     models.purchaseOrders.countDocuments({ ...query, paymentStatus: { $in: ["pendiente", "verificando"] } }),
-    models.purchaseOrders.aggregate([{ $match: { ...query, paymentStatus: "pagado" } }, { $group: { _id: null, total: { $sum: "$totalAmount" } } }]),
+    models.purchaseOrders.aggregate([{ $match: { ...aggQuery, paymentStatus: "pagado" } }, { $group: { _id: null, total: { $sum: "$totalAmount" } } }]),
     models.purchaseOrders.find(query).populate("asesorId", "name email").sort({ createdAt: -1 }).limit(5).lean(),
   ]);
   return { totalOrders, pendingPayment, totalSold: Number(totalSoldAgg[0]?.total || 0), recentOrders: recentOrders as unknown as IPurchaseOrder[] };

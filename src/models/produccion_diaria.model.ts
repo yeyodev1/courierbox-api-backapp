@@ -3,6 +3,11 @@ import mongoose, { Schema, type Document } from "mongoose";
 export interface IProduccionDiaria extends Document {
   fecha: Date;
   supervisorNombre: string;
+  /** Daily sales the admin records by line of business. */
+  ventaCourier: number;
+  ventaGestionCompra: number;
+  ventaVentas: number;
+  /** Total billed for the day — the sum of the three lines above. */
   facturado: number;
   clientesNuevos: number;
   notas: string;
@@ -15,6 +20,9 @@ const produccionDiariaSchema = new Schema<IProduccionDiaria>(
   {
     fecha: { type: Date, default: Date.now },
     supervisorNombre: { type: String, default: "" },
+    ventaCourier: { type: Number, default: 0, min: 0 },
+    ventaGestionCompra: { type: Number, default: 0, min: 0 },
+    ventaVentas: { type: Number, default: 0, min: 0 },
     facturado: { type: Number, default: 0, min: 0 },
     clientesNuevos: { type: Number, default: 0, min: 0 },
     notas: { type: String, default: "" },

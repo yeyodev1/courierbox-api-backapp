@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { Types } from "mongoose";
 import { models } from "../models/index.js";
 import { env } from "../config/env.js";
 import { getCurrentAuthUser } from "../middleware/auth.middleware.js";
@@ -164,6 +165,18 @@ export async function createGestionCompra(input: CreateGestionCompraInput) {
   return gestion;
 }
 
+/** Búsqueda libre por cliente (nombre, email, teléfono o cédula). Devuelve el filtro a mezclar en `contactoId`. */
+export async function buildContactoSearchFilter(q?: string): Promise<Record<string, any>> {
+  const term = (q ?? "").trim();
+  if (!term) return {};
+  const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const contactos = await models.contactos
+    .find({ $or: [{ nombre: regex }, { email: regex }, { telefono: regex }, { cedula: regex }] })
+    .select("_id")
+    .lean();
+  return { contactoId: { $in: contactos.map((c) => c._id) } };
+}
+
 export async function listGestiones(
   role: string,
   userId: string,
@@ -174,9 +187,10 @@ export async function listGestiones(
     asesorId?: string;
     mes?: number;
     año?: number;
+    q?: string;
   } = {}
 ) {
-  const filter: Record<string, any> = {};
+  const filter: Record<string, any> = { ...(await buildContactoSearchFilter(opts.q)) };
 
   // Role-based filtering
   if (!ALL_RECORDS_ROLES.includes(role)) {
@@ -222,9 +236,10 @@ export async function listAllGestionesForExport(
     asesorId?: string;
     mes?: number;
     año?: number;
+    q?: string;
   } = {}
 ) {
-  const filter: Record<string, any> = {};
+  const filter: Record<string, any> = { ...(await buildContactoSearchFilter(opts.q)) };
 
   if (!ALL_RECORDS_ROLES.includes(role)) {
     filter.asesorId = userId;
@@ -489,7 +504,8 @@ export async function marcarComprada(id: string, numeroOrden: string, userId: st
 export async function getEstadisticasMensuales(
   año: number,
   mes?: number,
-  asesorId?: string
+  asesorId?: string,
+  q?: string
 ): Promise<{
   totalGestiones: number;
   sumaValorTotal: number;
@@ -505,11 +521,20 @@ export async function getEstadisticasMensuales(
   const start = mes !== undefined ? new Date(año, mes - 1, 1) : new Date(año, 0, 1);
   const end = mes !== undefined ? new Date(año, mes, 1) : new Date(año + 1, 0, 1);
 
+  // aggregate() no castea strings a ObjectId como lo hace find(); sin esto el
+  // $match nunca coincide y los KPIs salen en 0 aunque el listado sí traiga filas.
+  const asesorObjectId =
+    asesorId && Types.ObjectId.isValid(asesorId) ? new Types.ObjectId(asesorId) : undefined;
+  const asesorMatch = {
+    ...(asesorObjectId ? { asesorId: asesorObjectId } : {}),
+    ...(await buildContactoSearchFilter(q)),
+  };
+
   const matchStage: Record<string, any> = {
     createdAt: { $gte: start, $lt: end },
     estado: { $ne: "cancelado" },
+    ...asesorMatch,
   };
-  if (asesorId) matchStage.asesorId = asesorId;
 
   const [stats, porEstado, porEstadoPago, confirmed] = await Promise.all([
     models.gestionesCompra.aggregate([
@@ -534,7 +559,7 @@ export async function getEstadisticasMensuales(
       },
     ]),
     models.gestionesCompra.aggregate([
-      { $match: { createdAt: { $gte: start, $lt: end }, ...(asesorId ? { asesorId } : {}) } },
+      { $match: { createdAt: { $gte: start, $lt: end }, ...asesorMatch } },
       { $group: { _id: "$estado", count: { $sum: 1 } } },
     ]),
     models.gestionesCompra.aggregate([
@@ -542,7 +567,7 @@ export async function getEstadisticasMensuales(
       { $group: { _id: "$estadoPago", count: { $sum: 1 } } },
     ]),
     models.gestionesCompra.aggregate([
-      { $match: { pagoConfirmadoEn: { $gte: start, $lt: end }, estadoPago: "confirmado", ...(asesorId ? { asesorId } : {}) } },
+      { $match: { pagoConfirmadoEn: { $gte: start, $lt: end }, estadoPago: "confirmado", ...asesorMatch } },
       { $group: { _id: null, ventasConfirmadas: { $sum: "$valorPagado" }, comisionGanada: { $sum: "$valorComision" } } },
     ]),
   ]);
