@@ -7,6 +7,7 @@ import {
   listVentas,
   recordatoriosCobro,
   buscarClientesVenta,
+  crearClienteVenta,
   updateInventario,
 } from "../controllers/ventas_producto.controller";
 
@@ -25,5 +26,6 @@ router.get("/", listVentas);
 router.post("/", createVenta);
 router.get("/recordatorios", recordatoriosCobro);
 router.get("/clientes", buscarClientesVenta);
+router.post("/clientes", crearClienteVenta);
 
 export default router;

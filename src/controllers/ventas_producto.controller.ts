@@ -244,3 +244,78 @@ export async function buscarClientesVenta(req: Request, res: Response, next: Nex
     next(error);
   }
 }
+
+/**
+ * Casillero is the unique key of a master client, but the sale form does not
+ * always know it. Generate a collision-free placeholder so the operator can
+ * register the client on the spot and correct the code later.
+ */
+async function generarCasillero(): Promise<string> {
+  for (let i = 0; i < 12; i++) {
+    const code = `CBX${Math.floor(100000 + Math.random() * 900000)}`;
+    const taken = await models.masterClientes.exists({ codigoCasillero: code });
+    if (!taken) return code;
+  }
+  return `CBX${Date.now().toString(36).toUpperCase()}`;
+}
+
+/** Create a master client straight from the sale form when the search finds none. */
+export async function crearClienteVenta(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
+
+    const nombreOficial = String(req.body.nombreOficial ?? "").trim();
+    if (!nombreOficial) return void res.status(400).json({ error: "El nombre del cliente es obligatorio" });
+
+    const cedulaRuc = String(req.body.cedulaRuc ?? "").trim();
+    const email = String(req.body.email ?? "").trim();
+    const telefono = String(req.body.telefono ?? "").trim();
+    const casilleroInput = String(req.body.codigoCasillero ?? "").trim().toUpperCase();
+
+    if (casilleroInput) {
+      const existente = await models.masterClientes.findOne({ codigoCasillero: casilleroInput }).lean();
+      if (existente) {
+        return void res.status(409).json({
+          error: `El casillero ${casilleroInput} ya pertenece a ${(existente as any).nombreOficial}`,
+          cliente: existente,
+        });
+      }
+    }
+
+    // Same "validación estricta" as the homologation flow: one cédula/RUC must
+    // not spawn a second account.
+    if (cedulaRuc) {
+      const porCedula = await models.masterClientes.findOne({ cedulaRuc }).lean();
+      if (porCedula) {
+        return void res.status(409).json({
+          error: `Esa cédula/RUC ya pertenece a ${(porCedula as any).nombreOficial} (${(porCedula as any).codigoCasillero}). Usa ese cliente.`,
+          cliente: porCedula,
+        });
+      }
+    }
+
+    const codigoCasillero = casilleroInput || (await generarCasillero());
+    const creado = await models.masterClientes.create({
+      codigoCasillero,
+      nombreOficial,
+      cedulaRuc,
+      email,
+      telefono,
+      notas: "Creado desde Ventas de productos",
+    });
+
+    res.status(201).json({
+      cliente: {
+        _id: String(creado._id),
+        nombreOficial: creado.nombreOficial,
+        codigoCasillero: creado.codigoCasillero,
+        cedulaRuc: creado.cedulaRuc,
+        email: creado.email,
+        telefono: creado.telefono,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
