@@ -3,6 +3,7 @@ import { models } from "../models/index";
 import { postFinancialMovement, reverseFinancialMovements } from "../services/financial-movement.service";
 import { deleteCloudinaryAsset, extractCloudinaryAssetRef, uploadGastoFactura } from "../services/upload.service";
 import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
+import { endOfCalendarDate, toCalendarDate, todayAsCalendarDate } from "../utils/calendar-date";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -58,12 +59,10 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
     if (proveedor) query.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     if (desde || hasta) {
       query.fecha = {};
-      if (desde) query.fecha.$gte = new Date(desde as string);
-      if (hasta) {
-        const end = new Date(hasta as string);
-        end.setHours(23, 59, 59, 999);
-        query.fecha.$lte = end;
-      }
+      const from = toCalendarDate(desde);
+      const to = endOfCalendarDate(hasta);
+      if (from) query.fecha.$gte = from;
+      if (to) query.fecha.$lte = to;
     }
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
@@ -146,12 +145,12 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       categoria,
       monto,
       descripcion,
-      fecha: fecha ? new Date(fecha) : new Date(),
+      fecha: toCalendarDate(fecha) ?? todayAsCalendarDate(),
       proveedor: proveedorResolved?.nombre || proveedor || "",
       proveedorId: proveedorResolved?._id,
       referencia: referencia || "",
       numeroFactura: numeroFactura || "",
-      fechaFactura: fechaFactura ? new Date(fechaFactura) : undefined,
+      fechaFactura: toCalendarDate(fechaFactura),
       libras: toNumber(libras),
       valorPorLibra: toNumber(valorPorLibra),
       valorTotal: calculateValorTotal(libras, valorPorLibra, toNumber(valorTotal) || toNumber(monto)),
@@ -208,6 +207,8 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
       updates.proveedorId = proveedorResolved?._id;
     }
 
+    if (updates.fecha !== undefined) updates.fecha = toCalendarDate(updates.fecha) ?? todayAsCalendarDate();
+    if (updates.fechaFactura !== undefined) updates.fechaFactura = toCalendarDate(updates.fechaFactura);
     if (updates.libras !== undefined) updates.libras = toNumber(updates.libras);
     if (updates.valorPorLibra !== undefined) updates.valorPorLibra = toNumber(updates.valorPorLibra);
     if (updates.valorPagado !== undefined) updates.valorPagado = toNumber(updates.valorPagado);
@@ -321,8 +322,9 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
     if (categoria) match.categoria = categoria;
     if (proveedor) match.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     match.fecha = {};
-    match.fecha.$gte = desde ? new Date(String(desde)) : desdeDefault;
-    if (hasta) match.fecha.$lte = new Date(String(hasta));
+    match.fecha.$gte = toCalendarDate(desde) ?? desdeDefault;
+    const hastaFecha = endOfCalendarDate(hasta);
+    if (hastaFecha) match.fecha.$lte = hastaFecha;
 
     const [totales, porTipo, porMes, porCategoria, porProveedor] = await Promise.all([
       models.gastos.aggregate([
