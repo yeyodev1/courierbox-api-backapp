@@ -50,10 +50,31 @@ async function resolveProveedor(proveedor?: string) {
   return created.toObject();
 }
 
+/**
+ * Cost Centre splits the ledger three ways: general expenses, shipping expenses,
+ * and receptions — the cargo Courier Box pays for by the pound. What separates a
+ * reception is that it carries weight, so the split is by weight rather than by a
+ * migration: every expense filed before the split still lands in the section it
+ * belongs to, and nothing had to be rewritten to get there.
+ *
+ * `logistico` predates the split and no longer has a tab of its own; without
+ * weight it reads as a general expense, which is what those records are.
+ */
+const SECTION_FILTERS: Record<string, Record<string, any>> = {
+  generales: { tipo: { $in: ["operacional", "logistico"] }, libras: { $not: { $gt: 0 } } },
+  envios: { tipo: "envio" },
+  recepciones: { $or: [{ tipo: "recepcion" }, { libras: { $gt: 0 } }] },
+};
+
+function sectionFilter(seccion: unknown): Record<string, any> {
+  const filter = SECTION_FILTERS[String(seccion || "")];
+  return filter ? { ...filter } : {};
+}
+
 export async function listGastos(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { tipo, categoria, proveedor, desde, hasta, limit, offset } = req.query;
-    const query: Record<string, any> = {};
+    const { tipo, categoria, proveedor, desde, hasta, limit, offset, seccion } = req.query;
+    const query: Record<string, any> = sectionFilter(seccion);
     if (tipo) query.tipo = tipo;
     if (categoria) query.categoria = categoria;
     if (proveedor) query.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -126,11 +147,19 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       valorPorLibra,
       valorTotal,
       valorPagado,
+      numeroPaquetes,
       idempotencyKey,
     } = req.body;
 
     if (!tipo || !categoria || monto === undefined || !descripcion) {
       res.status(400).json({ error: "tipo, categoria, monto, descripcion are required" });
+      return;
+    }
+    // A reception exists to record what a pound costs; without both figures the
+    // rate cannot be derived and the record would be indistinguishable from a
+    // plain expense, which is the mixing Cost Centre was built to undo.
+    if (tipo === "recepcion" && !(toNumber(libras) > 0 && toNumber(valorPorLibra) > 0)) {
+      res.status(400).json({ error: "Una recepción necesita libras y valor por libra mayores a cero" });
       return;
     }
     if (idempotencyKey) {
@@ -153,6 +182,7 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       fechaFactura: toCalendarDate(fechaFactura),
       libras: toNumber(libras),
       valorPorLibra: toNumber(valorPorLibra),
+      numeroPaquetes: toNumber(numeroPaquetes),
       valorTotal: calculateValorTotal(libras, valorPorLibra, toNumber(valorTotal) || toNumber(monto)),
       valorPagado: toNumber(valorPagado),
       paqueteId: paqueteId || undefined,
@@ -198,6 +228,7 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
     const allowedFields = [
       "tipo", "categoria", "monto", "descripcion", "fecha", "proveedor", "referencia",
       "paqueteId", "numeroFactura", "fechaFactura", "libras", "valorPorLibra", "valorTotal", "valorPagado",
+      "numeroPaquetes",
     ];
     const updates = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => allowedFields.includes(key))) as Record<string, any>;
 
@@ -209,6 +240,7 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
 
     if (updates.fecha !== undefined) updates.fecha = toCalendarDate(updates.fecha) ?? todayAsCalendarDate();
     if (updates.fechaFactura !== undefined) updates.fechaFactura = toCalendarDate(updates.fechaFactura);
+    if (updates.numeroPaquetes !== undefined) updates.numeroPaquetes = toNumber(updates.numeroPaquetes);
     if (updates.libras !== undefined) updates.libras = toNumber(updates.libras);
     if (updates.valorPorLibra !== undefined) updates.valorPorLibra = toNumber(updates.valorPorLibra);
     if (updates.valorPagado !== undefined) updates.valorPagado = toNumber(updates.valorPagado);
@@ -313,11 +345,11 @@ export async function uploadGastoArchivo(req: Request, res: Response, next: Next
 
 export async function resumenGastos(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { tipo, categoria, proveedor, desde, hasta } = _req.query;
+    const { tipo, categoria, proveedor, desde, hasta, seccion } = _req.query;
     const now = new Date();
     const desdeDefault = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
-    const match: Record<string, any> = {};
+    const match: Record<string, any> = sectionFilter(seccion);
     if (tipo) match.tipo = tipo;
     if (categoria) match.categoria = categoria;
     if (proveedor) match.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -335,6 +367,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
             total: { $sum: gastoTotalExpression },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
+            paquetes: { $sum: "$numeroPaquetes" },
           },
         },
       ]),
@@ -388,9 +421,18 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
       ]),
     ]);
 
+    const total = totales[0] || { total: 0, facturas: 0, libras: 0, paquetes: 0 };
+    // What a pound actually cost over the period. On the receptions tab this is the
+    // number Oscar is checking his supplier against, and it has to come from the
+    // totals rather than from averaging each record's rate, which would weight a
+    // 12 lb parcel the same as a 126 lb one.
+    const costoPorLibra = Number(total.libras) > 0
+      ? Number((Number(total.total) / Number(total.libras)).toFixed(4))
+      : 0;
+
     res.status(200).json({
       resumen: {
-        total: totales[0] || { total: 0, facturas: 0, libras: 0 },
+        total: { ...total, costoPorLibra },
         porTipo,
         porMes,
         porCategoria,
