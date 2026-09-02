@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   findByIdAndDelete: vi.fn(),
   findByIdAndUpdate: vi.fn(),
   aggregate: vi.fn(),
+  find: vi.fn(),
+  countDocuments: vi.fn(),
   proveedorFindOne: vi.fn(),
   proveedorCreate: vi.fn(),
   deleteCloudinaryAsset: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock('../models/index', () => ({
       findByIdAndDelete: mocks.findByIdAndDelete,
       findByIdAndUpdate: mocks.findByIdAndUpdate,
       aggregate: mocks.aggregate,
+      find: mocks.find,
+      countDocuments: mocks.countDocuments,
     },
     proveedores: {
       findOne: mocks.proveedorFindOne,
@@ -46,7 +50,7 @@ vi.mock('../services/upload.service', () => ({
   },
 }))
 
-import { createGasto, deleteGasto, resumenGastos, updateGasto, uploadGastoArchivo } from './costos.controller'
+import { createGasto, deleteGasto, listGastos, resumenGastos, updateGasto, uploadGastoArchivo } from './costos.controller'
 
 function makeRes() {
   return {
@@ -254,5 +258,143 @@ describe('costos.controller', () => {
       }),
     }), { new: true })
     expect(res.status).toHaveBeenCalledWith(200)
+  })
+})
+
+/**
+ * Cost Centre splits the ledger into general expenses, shipping expenses and
+ * receptions. The split is by weight, not by a migration, so expenses filed
+ * before the split still land in the right section.
+ */
+describe('costos.controller · secciones del centro de costos', () => {
+  function mockList() {
+    const chain = {
+      populate: vi.fn().mockReturnThis(),
+      sort: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      lean: vi.fn().mockResolvedValue([]),
+    }
+    mocks.find.mockReturnValue(chain)
+    mocks.countDocuments.mockResolvedValue(0)
+    return chain
+  }
+
+  async function listWith(query: Record<string, unknown>) {
+    mockList()
+    await listGastos({ query, user: { userId: 'u1', role: 'admin' } } as any, makeRes() as any, vi.fn())
+    return mocks.find.mock.calls[0][0]
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('lleva a recepciones todo lo que trae libras, aunque se haya guardado como logistico', async () => {
+    expect(await listWith({ seccion: 'recepciones' })).toEqual({
+      $or: [{ tipo: 'recepcion' }, { libras: { $gt: 0 } }],
+    })
+  })
+
+  it('deja fuera de gastos generales lo que ya cuenta como recepción', async () => {
+    expect(await listWith({ seccion: 'generales' })).toEqual({
+      tipo: { $in: ['operacional', 'logistico'] },
+      libras: { $not: { $gt: 0 } },
+    })
+  })
+
+  it('restringe la sección de envíos a su propio tipo', async () => {
+    expect(await listWith({ seccion: 'envios' })).toEqual({ tipo: 'envio' })
+  })
+
+  it('no filtra nada cuando no se pide una sección', async () => {
+    expect(await listWith({})).toEqual({})
+  })
+
+  it('ignora una sección que no existe en vez de devolver una lista vacía', async () => {
+    expect(await listWith({ seccion: 'inventada' })).toEqual({})
+  })
+
+  it('combina la sección con el rango de fechas', async () => {
+    const query = await listWith({ seccion: 'envios', desde: '2026-08-01', hasta: '2026-08-31' })
+    expect(query.tipo).toBe('envio')
+    expect(query.fecha.$gte.toISOString()).toBe('2026-08-01T00:00:00.000Z')
+    expect(query.fecha.$lte.toISOString()).toBe('2026-08-31T23:59:59.999Z')
+  })
+})
+
+describe('costos.controller · recepciones', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.postFinancialMovement.mockResolvedValue({})
+    mocks.proveedorFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) })
+  })
+
+  it('guarda el número de paquetes junto con las libras', async () => {
+    mocks.create.mockResolvedValue({ _id: 'g1', valorTotal: 379.2, monto: 379.2, fecha: new Date() })
+    const res = makeRes() as any
+
+    await createGasto({
+      body: {
+        tipo: 'recepcion',
+        categoria: 'IMPORTACIONES',
+        monto: 379.2,
+        descripcion: 'Carga TMA',
+        libras: 126.4,
+        valorPorLibra: 3,
+        numeroPaquetes: 58,
+      },
+      user: { userId: 'user-1', email: 'admin@example.com', role: 'admin' },
+    } as any, res, vi.fn())
+
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
+      tipo: 'recepcion',
+      libras: 126.4,
+      valorPorLibra: 3,
+      numeroPaquetes: 58,
+      valorTotal: 379.2,
+    }))
+    expect(res.status).toHaveBeenCalledWith(201)
+  })
+
+  it('rechaza una recepción sin valor por libra, que es lo único que la hace una recepción', async () => {
+    const res = makeRes() as any
+
+    await createGasto({
+      body: {
+        tipo: 'recepcion',
+        categoria: 'IMPORTACIONES',
+        monto: 367.82,
+        descripcion: 'Carga TMA',
+        libras: 126.4,
+      },
+      user: { userId: 'user-1', email: 'admin@example.com', role: 'admin' },
+    } as any, res, vi.fn())
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+
+  it('deriva el costo por libra de los totales, no del promedio de cada registro', async () => {
+    // 100 lb a $2 y 10 lb a $10: el promedio simple daría $6, el real es $2.72.
+    mocks.aggregate.mockResolvedValue([])
+    mocks.aggregate.mockResolvedValueOnce([{ _id: null, total: 300, facturas: 2, libras: 110, paquetes: 12 }])
+    const res = makeRes() as any
+
+    await resumenGastos({ query: { seccion: 'recepciones' } } as any, res, vi.fn())
+
+    const { resumen } = res.json.mock.calls[0][0]
+    expect(resumen.total.costoPorLibra).toBeCloseTo(2.7273, 4)
+    expect(resumen.total.paquetes).toBe(12)
+  })
+
+  it('no divide por cero cuando el período no tuvo libras', async () => {
+    mocks.aggregate.mockResolvedValue([])
+    mocks.aggregate.mockResolvedValueOnce([{ _id: null, total: 500, facturas: 3, libras: 0, paquetes: 0 }])
+    const res = makeRes() as any
+
+    await resumenGastos({ query: {} } as any, res, vi.fn())
+
+    expect(res.json.mock.calls[0][0].resumen.total.costoPorLibra).toBe(0)
   })
 })
