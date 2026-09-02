@@ -375,52 +375,132 @@ export async function confirmarReserva(id: string, userId: string, userName: str
     .lean();
 }
 
-export async function confirmarPago(id: string, monto: number, userId: string, userName: string) {
+/**
+ * Register a payment against the balance.
+ *
+ * Payment used to be a single irreversible step: `confirmarPago` refused to run
+ * twice, so a client who left a deposit and came back to settle up had nowhere to
+ * put the second figure — the gestión kept reading as if the deposit were the
+ * whole price, and "cuánto me deben por gestiones de compra" had no answer in the
+ * data. Payments accumulate now, and the state follows the arithmetic: `parcial`
+ * while something is still owed, `confirmado` once the balance reaches zero.
+ *
+ * Each abono posts its own income movement, dated when the money actually came
+ * in, so the income statement tracks the cash rather than jumping the whole sale
+ * on the day it happened to be settled. The commission posts once, when the
+ * gestión is fully paid — it is earned on the sale, not on each instalment.
+ */
+export async function registrarAbono(
+  id: string,
+  input: {
+    monto: number;
+    fecha?: Date | string;
+    metodo?: string;
+    referencia?: string;
+    notas?: string;
+  },
+  userId: string,
+  userName: string
+) {
+  const monto = Math.round(Number(input.monto) * 100) / 100;
+  if (!Number.isFinite(monto) || monto <= 0) {
+    throw new Error("El abono debe ser mayor a cero");
+  }
+
   const gestion = await models.gestionesCompra.findById(id).lean();
   if (!gestion) return null;
-  if (monto <= 0 || monto > Number(gestion.valorTotal || 0)) {
-    throw new Error("El monto confirmado debe ser mayor a cero y no superar el valor total");
+  if (gestion.estado === "cancelado") {
+    throw new Error("No se pueden registrar abonos en una gestión cancelada");
   }
-  const transitioned = await models.gestionesCompra.findOneAndUpdate(
-    { _id: id, estadoPago: { $ne: "confirmado" } },
-    {
-      $set: {
-        estadoPago: "confirmado",
-        valorPagado: monto,
-        pagoConfirmadoEn: new Date(),
-        pagoConfirmadoPor: userId,
-        reservaConfirmada: true,
+
+  const valorTotal = Number(gestion.valorTotal || 0);
+  const pagadoPrevio = Number(gestion.valorPagado || 0);
+  const saldo = Math.round((valorTotal - pagadoPrevio) * 100) / 100;
+  if (saldo <= 0) {
+    throw new Error("Esta gestión ya está pagada por completo");
+  }
+  if (monto > saldo) {
+    throw new Error(`El abono supera el saldo pendiente de $${saldo.toFixed(2)}`);
+  }
+
+  const pagadoTotal = Math.round((pagadoPrevio + monto) * 100) / 100;
+  const saldado = pagadoTotal >= valorTotal;
+  const fecha = input.fecha ? new Date(input.fecha) : new Date();
+  const abonoId = new Types.ObjectId();
+
+  const set: Record<string, unknown> = {
+    valorPagado: pagadoTotal,
+    estadoPago: saldado ? "confirmado" : "parcial",
+    // Any money in settles the reserve; there is nothing left to confirm separately.
+    reservaConfirmada: true,
+  };
+  if (saldado) {
+    set.pagoConfirmadoEn = new Date();
+    set.pagoConfirmadoPor = userId;
+  }
+
+  // Guarded on the balance we read, so two people registering at once cannot
+  // between them take the gestión past its own total.
+  const updated = await models.gestionesCompra
+    .findOneAndUpdate(
+      { _id: id, valorPagado: pagadoPrevio },
+      {
+        $set: set,
+        $push: {
+          abonos: {
+            _id: abonoId,
+            monto,
+            fecha,
+            metodo: input.metodo ?? "transferencia",
+            referencia: input.referencia ?? "",
+            notas: input.notas ?? "",
+            registradoPor: userId,
+            registradoPorNombre: userName,
+            createdAt: new Date(),
+          },
+          auditLog: {
+            timestamp: new Date(),
+            action: saldado ? "pago_completado" : "abono_registrado",
+            userId,
+            userName,
+            notes: `Abono de $${monto.toFixed(2)}. Saldo pendiente: $${(valorTotal - pagadoTotal).toFixed(2)}`,
+          },
+        },
       },
-      $push: { auditLog: { timestamp: new Date(), action: "pago_confirmado", userId, userName, notes: `Pago confirmado por $${monto.toFixed(2)}` } },
-    },
-    { new: true, runValidators: true }
-  ).populate("contactoId", "nombre email telefono").populate("asesorId", "name email").lean();
-  const updated = transitioned ?? await models.gestionesCompra.findById(id)
+      { new: true, runValidators: true }
+    )
     .populate("contactoId", "nombre email telefono")
     .populate("asesorId", "name email")
     .lean();
-  if (!updated || updated.estadoPago !== "confirmado") return null;
-  if (Number(updated.valorPagado || 0) !== monto) {
-    throw new Error("El pago ya fue confirmado con un monto diferente");
+
+  if (!updated) {
+    throw new Error("El saldo cambió mientras registrabas el abono; vuelve a intentarlo");
   }
 
-  await Promise.all([
-    postFinancialMovement({
-      direccion: "ingreso",
-      base: "devengado",
-      origen: "gestion",
-      origenId: id,
-      concepto: "venta_confirmada",
-      categoria: "GESTION_COMPRA",
-      monto,
-      estado: "confirmado",
-      fechaOperacion: updated.pagoConfirmadoEn ?? new Date(),
-      fechaPago: updated.pagoConfirmadoEn ?? new Date(),
-      clienteId: typeof updated.contactoId === "object" ? (updated.contactoId as any)._id : updated.contactoId,
-      asesorId: typeof updated.asesorId === "object" ? (updated.asesorId as any)._id : updated.asesorId,
-      creadoPor: userId,
-    }),
-    postFinancialMovement({
+  const clienteId = typeof updated.contactoId === "object" ? (updated.contactoId as any)._id : updated.contactoId;
+  const asesorRef = typeof updated.asesorId === "object" ? (updated.asesorId as any)._id : updated.asesorId;
+
+  await postFinancialMovement({
+    direccion: "ingreso",
+    base: "devengado",
+    origen: "gestion",
+    origenId: id,
+    // Unique per abono: movements are keyed by concepto, and a shared one would
+    // silently collapse every instalment into the first.
+    concepto: `abono:${String(abonoId)}`,
+    categoria: "GESTION_COMPRA",
+    monto,
+    estado: "confirmado",
+    fechaOperacion: fecha,
+    fechaPago: fecha,
+    clienteId,
+    asesorId: asesorRef,
+    creadoPor: userId,
+    metadata: { abonoId: String(abonoId), saldoPendiente: Math.round((valorTotal - pagadoTotal) * 100) / 100 },
+  });
+
+  if (saldado) {
+    await postFinancialMovement({
       direccion: "egreso",
       base: "devengado",
       origen: "gestion",
@@ -430,30 +510,45 @@ export async function confirmarPago(id: string, monto: number, userId: string, u
       monto: Number(updated.valorComision || 0),
       estado: "confirmado",
       fechaOperacion: updated.pagoConfirmadoEn ?? new Date(),
-      asesorId: typeof updated.asesorId === "object" ? (updated.asesorId as any)._id : updated.asesorId,
+      asesorId: asesorRef,
       creadoPor: userId,
-    }),
-  ]);
-  const contacto = updated.contactoId as any;
-  if (contacto?.email) {
-    await createAndSendNotification({
-      evento: "pago_confirmado",
-      destinatario: contacto.email,
-      destinatarioTelefono: contacto.telefono || "",
-      destinatarioNombre: contacto.nombre || "",
-      operacionTipo: "gestion_compra",
-      operacionId: id,
-      payload: {
-        to: contacto.email,
-        clientName: contacto.nombre,
-        subject: "Pago confirmado por Courier Box",
-        title: "Pago confirmado",
-        message: `Confirmamos tu pago de $${monto.toFixed(2)}. Tu gestión continuará al proceso de compra.`,
-        viewUrl: `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`,
-      },
     });
+
+    const contacto = updated.contactoId as any;
+    if (contacto?.email) {
+      await createAndSendNotification({
+        evento: "pago_confirmado",
+        destinatario: contacto.email,
+        destinatarioTelefono: contacto.telefono || "",
+        destinatarioNombre: contacto.nombre || "",
+        operacionTipo: "gestion_compra",
+        operacionId: id,
+        payload: {
+          to: contacto.email,
+          clientName: contacto.nombre,
+          subject: "Pago confirmado por Courier Box",
+          title: "Pago confirmado",
+          message: `Confirmamos tu pago de $${valorTotal.toFixed(2)}. Tu gestión continuará al proceso de compra.`,
+          viewUrl: `${env.FRONTEND_ORIGIN[0] ?? "https://courierboxlogistics.com"}/compra/${updated.viewToken}`,
+        },
+      });
+    }
   }
+
   return updated;
+}
+
+/**
+ * Settle the whole outstanding balance in one entry. Kept as its own endpoint
+ * because the screen offers it as a button, but it is an abono like any other —
+ * one code path decides what a payment does to a gestión.
+ */
+export async function confirmarPago(id: string, monto: number, userId: string, userName: string) {
+  const gestion = await models.gestionesCompra.findById(id).select("valorTotal valorPagado").lean();
+  if (!gestion) return null;
+  const saldo = Math.round((Number(gestion.valorTotal || 0) - Number(gestion.valorPagado || 0)) * 100) / 100;
+  const importe = Number.isFinite(monto) && monto > 0 ? monto : saldo;
+  return registrarAbono(id, { monto: importe }, userId, userName);
 }
 
 export async function asignarComprador(id: string, compradorId: string, userId: string, userName: string) {
@@ -513,6 +608,7 @@ export async function getEstadisticasMensuales(
   sumaCostoVenta: number;
   sumaMargenNeto: number;
   sumaValorPagado: number;
+  sumaSaldoPendiente: number;
   ventasConfirmadas: number;
   comisionGanada: number;
   porEstado: Record<string, number>;
@@ -547,6 +643,13 @@ export async function getEstadisticasMensuales(
           sumaComision: { $sum: "$valorComision" },
           sumaCostoVenta: { $sum: "$costoVenta" },
           sumaValorPagado: { $sum: "$valorPagado" },
+          // What is still owed on purchase management — the figure that had no
+          // home while a gestión could only be unpaid or paid in full.
+          sumaSaldoPendiente: {
+            $sum: {
+              $max: [0, { $subtract: ["$valorTotal", { $ifNull: ["$valorPagado", 0] }] }],
+            },
+          },
           sumaMargenNeto: {
             $sum: {
               $subtract: [
@@ -585,6 +688,7 @@ export async function getEstadisticasMensuales(
     sumaComision: 0,
     sumaCostoVenta: 0,
     sumaValorPagado: 0,
+    sumaSaldoPendiente: 0,
     sumaMargenNeto: 0,
   };
 
@@ -594,7 +698,12 @@ export async function getEstadisticasMensuales(
     sumaComision: result.sumaComision,
     sumaCostoVenta: result.sumaCostoVenta,
     sumaMargenNeto: result.sumaMargenNeto,
-    sumaValorPagado: Number(confirmed[0]?.ventasConfirmadas || 0),
+    // Money actually received, instalments included. This was aliased to
+    // `ventasConfirmadas`, which counts only gestiones paid in full — with
+    // partial payments that reports every deposit taken as nothing received.
+    // `ventasConfirmadas` still carries the settled-sales figure on its own key.
+    sumaValorPagado: Number(result.sumaValorPagado || 0),
+    sumaSaldoPendiente: Math.round(Number(result.sumaSaldoPendiente || 0) * 100) / 100,
     ventasConfirmadas: Number(confirmed[0]?.ventasConfirmadas || 0),
     comisionGanada: Number(confirmed[0]?.comisionGanada || 0),
     porEstado: estadoMap,
