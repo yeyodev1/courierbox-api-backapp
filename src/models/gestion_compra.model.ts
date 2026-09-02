@@ -3,7 +3,8 @@ import crypto from "crypto";
 
 export type GestionCompraEstado = "borrador" | "activa" | "completado" | "cancelado";
 export type GestionCompraStage = "solicitada" | "revisando" | "comprada" | "en_transito" | "entregada";
-export type GestionCompraPagoEstado = "pendiente" | "verificando" | "confirmado" | "rechazado" | "reembolsado";
+export type GestionCompraPagoEstado = "pendiente" | "verificando" | "parcial" | "confirmado" | "rechazado" | "reembolsado";
+export type AbonoMetodo = "efectivo" | "transferencia" | "tarjeta" | "deposito" | "otro";
 export type GestionCompraCompraEstado = "pendiente" | "asignada" | "comprando" | "comprada" | "cancelada";
 export type GestionCompraBodegaEstado = "pendiente" | "recibida" | "preparando_despacho" | "despachada";
 export type GestionCompraEntregaEstado = "sin_envio" | "pendiente" | "asignada" | "en_ruta" | "entregada" | "fallida" | "reprogramada";
@@ -29,6 +30,28 @@ export interface IAuditEntryGC {
   notes?: string;
 }
 
+/**
+ * A payment against the balance. The screen only knew how to confirm a payment
+ * once — a second one had nowhere to go, so a client who paid a deposit and then
+ * settled up left the gestión reading as if the deposit were the whole thing, and
+ * "cuánto me deben por gestiones de compra" could not be answered from the data.
+ *
+ * Each abono is kept whole, with who took it and when, rather than being folded
+ * into a running total: the total is recoverable from the entries, the entries
+ * are not recoverable from the total.
+ */
+export interface IGestionAbono {
+  _id: Types.ObjectId;
+  monto: number;
+  fecha: Date;
+  metodo: AbonoMetodo;
+  referencia?: string;
+  notas?: string;
+  registradoPor: Types.ObjectId;
+  registradoPorNombre: string;
+  createdAt: Date;
+}
+
 export interface IGestionCompraFoto {
   url: string;
   title?: string;
@@ -48,6 +71,7 @@ export interface IGestionCompra extends Document {
   valorTotal: number;
   valorReserva: number;
   valorPagado: number;
+  abonos: IGestionAbono[];
   cuentaBancariaId?: Types.ObjectId;
   reservaConfirmada: boolean;
   costoVenta: number;
@@ -94,6 +118,24 @@ const AuditEntrySchema = new Schema<IAuditEntryGC>(
   { _id: false }
 );
 
+const AbonoSchema = new Schema<IGestionAbono>(
+  {
+    monto: { type: Number, required: true, min: 0.01 },
+    fecha: { type: Date, required: true, default: () => new Date() },
+    metodo: {
+      type: String,
+      enum: ["efectivo", "transferencia", "tarjeta", "deposito", "otro"],
+      default: "transferencia",
+    },
+    referencia: { type: String, trim: true },
+    notas: { type: String, trim: true },
+    registradoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    registradoPorNombre: { type: String, required: true },
+    createdAt: { type: Date, default: () => new Date() },
+  },
+  { _id: true }
+);
+
 const GestionProductoSchema = new Schema<IGestionProducto>(
   {
     tienda: { type: String, required: true, trim: true },
@@ -123,6 +165,7 @@ const GestionCompraSchema = new Schema<IGestionCompra>(
     valorTotal: { type: Number, required: true, min: 0 },
     valorReserva: { type: Number, required: true, min: 0, default: 0 },
     valorPagado: { type: Number, required: true, min: 0, default: 0 },
+    abonos: { type: [AbonoSchema], default: [] },
     cuentaBancariaId: { type: Schema.Types.ObjectId, ref: "CuentaBancaria" },
     reservaConfirmada: { type: Boolean, default: false },
     costoVenta: { type: Number, required: true, min: 0, default: 0 },
@@ -130,7 +173,7 @@ const GestionCompraSchema = new Schema<IGestionCompra>(
     feeConfigId: { type: Schema.Types.ObjectId, ref: "FeeConfig" },
     estadoPago: {
       type: String,
-      enum: ["pendiente", "verificando", "confirmado", "rechazado", "reembolsado"],
+      enum: ["pendiente", "verificando", "parcial", "confirmado", "rechazado", "reembolsado"],
       default: "pendiente",
     },
     pagoConfirmadoEn: { type: Date },

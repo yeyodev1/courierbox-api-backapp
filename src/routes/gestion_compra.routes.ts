@@ -17,6 +17,7 @@ import {
   exportExcel,
   exportPdf,
   confirmarPago,
+  registrarAbono,
   asignarComprador,
   marcarComprada,
   getBitacora,
@@ -56,6 +57,7 @@ gestionCompraRouter.patch("/:id", canAccess, updateGestion);
 // Admin actions
 gestionCompraRouter.post("/:id/confirmar-reserva", adminOnly, confirmarReserva);
 gestionCompraRouter.post("/:id/confirmar-pago", adminOnly, confirmarPago);
+gestionCompraRouter.post("/:id/abonos", adminOnly, registrarAbono);
 gestionCompraRouter.post("/:id/asignar-comprador", adminOnly, asignarComprador);
 gestionCompraRouter.post("/:id/marcar-comprada", canAccess, marcarComprada);
 gestionCompraRouter.post("/:id/notificar", adminOnly, reNotificar);
