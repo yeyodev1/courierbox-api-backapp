@@ -33,6 +33,8 @@ import {
   registrarAbonoVenta,
   settleCuotas,
   syncComisionMovement,
+  planPagoMigrado,
+  updateDesdeRespaldo,
 } from "./venta_producto.service";
 
 function mockVenta(venta: Record<string, unknown> | null) {
@@ -287,5 +289,58 @@ describe("syncComisionMovement", () => {
       expect.objectContaining({ $set: expect.objectContaining({ estado: "anulado" }) })
     );
     expect(mocks.postFinancialMovement).not.toHaveBeenCalled();
+  });
+});
+
+describe("planPagoMigrado", () => {
+  it("toma el depósito de una venta a crédito", () => {
+    const plan = planPagoMigrado({ total: 100, abono: 40, saldo: 60, esCredito: true });
+    expect(plan).toMatchObject({ valorPagado: 40, saldo: 60, estadoPago: "parcial" });
+  });
+
+  it("da por cobrada la venta al contado confirmada", () => {
+    const plan = planPagoMigrado({ total: 35, esCredito: false, pagoConfirmado: true });
+    expect(plan).toMatchObject({ valorPagado: 35, saldo: 0, estadoPago: "pagado" });
+  });
+
+  it("destapa la deuda de la venta entregada sin cobrar", () => {
+    // El caso de Oscar: saldo 0 guardado, pero nadie pagó nada.
+    const plan = planPagoMigrado({ total: 35, saldo: 0, esCredito: false, pagoConfirmado: false });
+    expect(plan).toMatchObject({ valorPagado: 0, saldo: 35, estadoPago: "pendiente" });
+    expect(plan.deudaOculta).toBe(35);
+  });
+
+  it("no cuenta como deuda oculta la que el registro ya declaraba", () => {
+    const plan = planPagoMigrado({ total: 100, abono: 40, saldo: 60, esCredito: true });
+    expect(plan.deudaOculta).toBe(0);
+  });
+
+  it("nunca deja el pagado por encima del total", () => {
+    const plan = planPagoMigrado({ total: 50, abono: 80, esCredito: true });
+    expect(plan.valorPagado).toBe(50);
+    expect(plan.saldo).toBe(0);
+  });
+});
+
+describe("updateDesdeRespaldo", () => {
+  it("restaura los valores guardados", () => {
+    const update = updateDesdeRespaldo({ valorPagado: 40, saldo: 60, estadoPago: "parcial" }) as any;
+    expect(update.$set).toMatchObject({ valorPagado: 40, saldo: 60, estadoPago: "parcial" });
+  });
+
+  it("desetea lo que el documento no tenía, en vez de escribir null", () => {
+    // Una venta previa a la migración no tenía `abonos` ni `estadoPago`;
+    // devolverlos como null sería un tercer estado, no el original.
+    const update = updateDesdeRespaldo({ saldo: 0 }) as any;
+    expect(update.$unset).toHaveProperty("abonos");
+    expect(update.$unset).toHaveProperty("estadoPago");
+    expect(update.$set).not.toHaveProperty("abonos");
+  });
+
+  it("sobrevive el viaje de ida y vuelta por JSON del archivo de respaldo", () => {
+    const original = { valorPagado: 40, saldo: 60, estadoPago: "parcial", abonos: [], cuotas: [] };
+    const update = updateDesdeRespaldo(JSON.parse(JSON.stringify(original))) as any;
+    expect(update.$set).toEqual(original);
+    expect(update.$unset).toEqual({ pagoConfirmado: "", pagoCompletadoEn: "" });
   });
 });

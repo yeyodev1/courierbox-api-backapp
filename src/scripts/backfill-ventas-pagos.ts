@@ -1,8 +1,16 @@
 import "dotenv/config";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Types } from "mongoose";
 import { dbConnect } from "../db/mongo";
 import { models } from "../models/index";
-import { estadoPagoFor, normalizeMetodo, settleCuotas, toMoney } from "../services/venta_producto.service";
+import {
+  CAMPOS_PAGO_MIGRABLES,
+  normalizeMetodo,
+  planPagoMigrado,
+  settleCuotas,
+  updateDesdeRespaldo,
+} from "../services/venta_producto.service";
 
 /**
  * Bring sales filed before the paid/owed split onto the same footing.
@@ -22,28 +30,59 @@ import { estadoPagoFor, normalizeMetodo, settleCuotas, toMoney } from "../servic
 
 const APPLY = process.argv.includes("--apply");
 const WITH_MOVEMENTS = process.argv.includes("--con-movimientos");
+const RESTORE_FLAG = process.argv.indexOf("--restore");
+const RESTORE_FILE = RESTORE_FLAG >= 0 ? process.argv[RESTORE_FLAG + 1] : undefined;
+
+/**
+ * Undoing this migration has to be possible without a database dump, because
+ * the person running it may not have one and the alternative is reconstructing
+ * payment state by hand. Every applied run writes the prior values of exactly
+ * the fields it is about to overwrite, and `--restore` puts them back.
+ */
+function backupPath(): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(process.cwd(), "backups", `ventas-pagos-${stamp}.json`);
+}
+
+async function restoreFromBackup(file: string) {
+  const contenido = JSON.parse(await fs.readFile(file, "utf8")) as {
+    generadoEn?: string;
+    ventas: Array<{ _id: string } & Record<string, unknown>>;
+  };
+  const filas = contenido.ventas || [];
+
+  for (const fila of filas) {
+    const { _id, ...campos } = fila;
+    await models.ventasProducto.updateOne({ _id }, updateDesdeRespaldo(campos));
+  }
+
+  console.log(
+    `Restauradas ${filas.length} ventas desde ${file}` +
+      (contenido.generadoEn ? ` (respaldo del ${contenido.generadoEn})` : "")
+  );
+}
 
 async function main() {
   await dbConnect();
 
+  if (RESTORE_FILE) {
+    await restoreFromBackup(RESTORE_FILE);
+    return;
+  }
+
   const ventas = await models.ventasProducto.find({}).lean();
   let migradas = 0;
   let pendienteDescubierto = 0;
+  const respaldo: Array<Record<string, unknown>> = [];
+  const backupFile = backupPath();
+  let backupWritten = false;
 
   for (const venta of ventas) {
     const yaMigrada = Array.isArray(venta.abonos) && venta.abonos.length > 0;
     if (yaMigrada && venta.estadoPago) continue;
 
-    const total = toMoney(venta.total);
-    const esCredito = Boolean(venta.esCredito);
-    const valorPagado = toMoney(
-      Math.min(esCredito ? toMoney(venta.abono) : venta.pagoConfirmado ? total : 0, total)
-    );
-    const saldo = toMoney(Math.max(total - valorPagado, 0));
-    const estadoPago = estadoPagoFor(total, valorPagado);
-
-    // Only the sales that were reporting zero owed while money was still out.
-    if (saldo > 0 && toMoney(venta.saldo) === 0) pendienteDescubierto += saldo;
+    const { total, valorPagado, saldo, estadoPago, deudaOculta } = planPagoMigrado(venta);
+    pendienteDescubierto += deudaOculta;
 
     const abonoId = new Types.ObjectId();
     const set: Record<string, unknown> = {
@@ -73,11 +112,30 @@ async function main() {
 
     migradas += 1;
 
+    // Captured for every candidate, dry run included, so the printed plan and
+    // the backup describe the same set of documents.
+    const previo: Record<string, unknown> = { _id: String(venta._id) };
+    for (const campo of CAMPOS_PAGO_MIGRABLES) {
+      const valor = (venta as unknown as Record<string, unknown>)[campo];
+      if (valor !== undefined) previo[campo] = valor;
+    }
+    respaldo.push(previo);
+
     if (!APPLY) {
       console.log(
         `[dry-run] ${String(venta._id)} ${venta.clienteNombre || "(sin cliente)"} — total $${total.toFixed(2)}, pagado $${valorPagado.toFixed(2)}, saldo $${saldo.toFixed(2)} → ${estadoPago}`
       );
       continue;
+    }
+
+    if (!backupWritten) {
+      await fs.mkdir(path.dirname(backupFile), { recursive: true });
+      await fs.writeFile(
+        backupFile,
+        JSON.stringify({ generadoEn: new Date().toISOString(), ventas: respaldo }, null, 2)
+      );
+      backupWritten = true;
+      console.log(`Respaldo escrito en ${backupFile}`);
     }
 
     await models.ventasProducto.updateOne({ _id: venta._id }, { $set: set });
@@ -101,6 +159,16 @@ async function main() {
         metadata: { ventaId: String(venta._id), abonoId: String(abonoId), backfill: true },
       });
     }
+  }
+
+  if (APPLY && backupWritten) {
+    // Rewritten complete: the first write only held the documents seen so far.
+    await fs.writeFile(
+      backupFile,
+      JSON.stringify({ generadoEn: new Date().toISOString(), ventas: respaldo }, null, 2)
+    );
+    console.log(`Respaldo final (${respaldo.length} ventas): ${backupFile}`);
+    console.log(`Para revertir: pnpm ventas:backfill-pagos -- --restore ${backupFile}`);
   }
 
   console.log(

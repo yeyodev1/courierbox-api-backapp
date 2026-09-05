@@ -324,3 +324,73 @@ export async function eliminarAbonoVenta(id: string, abonoId: string, userId: st
 }
 
 export { reverseFinancialMovements };
+
+/* ------------------------------------------------------------------ */
+/* Migrating sales filed before the paid/owed split                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Exactly the fields the backfill overwrites — so a backup captures what it is
+ * about to change and nothing else, and a restore knows what to put back.
+ */
+export const CAMPOS_PAGO_MIGRABLES = [
+  "valorPagado",
+  "saldo",
+  "estadoPago",
+  "pagoConfirmado",
+  "pagoCompletadoEn",
+  "abonos",
+  "cuotas",
+] as const;
+
+export type CampoPagoMigrable = (typeof CAMPOS_PAGO_MIGRABLES)[number];
+
+/**
+ * Read the payment intent out of the old fields.
+ *
+ * A credit sale kept its deposit in `abono`; a cash sale said only whether it
+ * had been settled, via `pagoConfirmado`. Everything else was handed over
+ * without the money and reported `saldo: 0` — the debt that had no home.
+ */
+export function planPagoMigrado(venta: {
+  total?: unknown;
+  abono?: unknown;
+  saldo?: unknown;
+  esCredito?: unknown;
+  pagoConfirmado?: unknown;
+}): { total: number; valorPagado: number; saldo: number; estadoPago: VentaEstadoPago; deudaOculta: number } {
+  const total = toMoney(venta.total);
+  const esCredito = Boolean(venta.esCredito);
+  const bruto = esCredito ? toMoney(venta.abono) : venta.pagoConfirmado ? total : 0;
+  const valorPagado = toMoney(Math.min(Math.max(bruto, 0), total));
+  const saldo = toMoney(Math.max(total - valorPagado, 0));
+
+  return {
+    total,
+    valorPagado,
+    saldo,
+    estadoPago: estadoPagoFor(total, valorPagado),
+    // What the old record was hiding: money owed while it reported nothing owed.
+    deudaOculta: saldo > 0 && toMoney(venta.saldo) === 0 ? saldo : 0,
+  };
+}
+
+/**
+ * The update that puts one backed-up sale back as it was. A field missing from
+ * the backup was missing on the document too, so it is unset rather than
+ * written as null — which would be a third state, not the old one.
+ */
+export function updateDesdeRespaldo(fila: Record<string, unknown>): Record<string, unknown> {
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, unknown> = {};
+
+  for (const campo of CAMPOS_PAGO_MIGRABLES) {
+    if (campo in fila && fila[campo] !== undefined) set[campo] = fila[campo];
+    else unset[campo] = "";
+  }
+
+  const update: Record<string, unknown> = {};
+  if (Object.keys(set).length) update.$set = set;
+  if (Object.keys(unset).length) update.$unset = unset;
+  return update;
+}
