@@ -1,7 +1,20 @@
 import type { Request, Response, NextFunction } from "express";
+import { Types } from "mongoose";
 import { models } from "../models/index";
 import { METODOS_ENTREGA, type ICuotaCredito } from "../models/venta_producto.model";
 import { sendVentaProductoAdmin, sendVentaProductoCliente } from "../services/email.service";
+import { postFinancialMovement } from "../services/financial-movement.service";
+import {
+  comisionTotalDe,
+  eliminarAbonoVenta,
+  estadoPagoFor,
+  normalizeMetodo,
+  registrarAbonoVenta,
+  settleCuotas,
+  syncComisionMovement,
+  toMoney,
+} from "../services/venta_producto.service";
+import { endOfCalendarDate, toCalendarDate, todayAsCalendarDate } from "../utils/calendar-date";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -63,11 +76,63 @@ export async function updateInventario(req: Request, res: Response, next: NextFu
 /* Sales                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The sales list, and alongside it what the period is still owed.
+ *
+ * The totals come from the filtered set rather than from the page of rows sent
+ * back: the list is capped at a couple of hundred records and a balance that
+ * only counted the visible ones would quietly understate the debt the further
+ * back Oscar looked.
+ */
 export async function listVentas(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const take = Math.min(parseInt(req.query.limit as string) || 50, 200);
-    const items = await models.ventasProducto.find().sort({ fecha: -1 }).limit(take).lean();
-    res.status(200).json({ items });
+    const { estadoPago, desde, hasta, clienteId } = req.query;
+
+    const filter: Record<string, any> = {};
+    if (estadoPago === "pendiente" || estadoPago === "parcial" || estadoPago === "pagado") {
+      filter.estadoPago = estadoPago;
+    }
+    // "Con saldo" is the working view: everything still owed, part-paid or not.
+    if (estadoPago === "con_saldo") filter.estadoPago = { $in: ["pendiente", "parcial"] };
+    if (clienteId && Types.ObjectId.isValid(String(clienteId))) filter.clienteId = clienteId;
+
+    const desdeFecha = toCalendarDate(desde);
+    const hastaFecha = endOfCalendarDate(hasta);
+    if (desdeFecha || hastaFecha) {
+      filter.fecha = {};
+      if (desdeFecha) filter.fecha.$gte = desdeFecha;
+      if (hastaFecha) filter.fecha.$lte = hastaFecha;
+    }
+
+    const [items, totales] = await Promise.all([
+      models.ventasProducto.find(filter).sort({ fecha: -1 }).limit(take).lean(),
+      models.ventasProducto.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            ventas: { $sum: 1 },
+            total: { $sum: "$total" },
+            cobrado: { $sum: "$valorPagado" },
+            pendiente: { $sum: "$saldo" },
+            conSaldo: { $sum: { $cond: [{ $gt: ["$saldo", 0] }, 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    const agg = totales[0] || {};
+    res.status(200).json({
+      items,
+      resumen: {
+        ventas: Number(agg.ventas || 0),
+        total: toMoney(agg.total),
+        cobrado: toMoney(agg.cobrado),
+        pendiente: toMoney(agg.pendiente),
+        conSaldo: Number(agg.conSaldo || 0),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -77,7 +142,7 @@ function normalizeCuotas(input: unknown): ICuotaCredito[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((c: Record<string, unknown>) => ({
-      fecha: c.fecha ? new Date(c.fecha as string) : new Date(),
+      fecha: toCalendarDate(c.fecha) ?? todayAsCalendarDate(),
       monto: Math.max(Number(c.monto) || 0, 0),
       pagada: Boolean(c.pagada),
       recordatorioEnviado: false,
@@ -109,16 +174,45 @@ export async function createVenta(req: Request, res: Response, next: NextFunctio
     const total = subtotal + (metodoEntrega === "envio" ? valorEnvio : 0);
 
     const esCredito = Boolean(b.esCredito);
-    const abono = esCredito ? Math.min(Math.max(Number(b.abono) || 0, 0), total) : 0;
-    const saldo = esCredito ? Math.max(total - abono, 0) : 0;
     const cuotas = esCredito ? normalizeCuotas(b.cuotas) : [];
+
+    // What was actually collected at the till. A credit sale takes a deposit; a
+    // cash sale takes the lot — but only if the money really came in, which is
+    // what `pagoConfirmado` says. A sale handed over unpaid starts at zero and
+    // shows up as owed instead of silently reading as settled.
+    const pagoInicial = esCredito
+      ? Math.min(Math.max(toMoney(b.abono), 0), total)
+      : b.pagoConfirmado
+        ? total
+        : Math.min(Math.max(toMoney(b.valorPagado ?? b.abono), 0), total);
+    const valorPagado = toMoney(pagoInicial);
+    const saldo = toMoney(Math.max(total - valorPagado, 0));
+    const estadoPago = estadoPagoFor(total, valorPagado);
+    const fechaVenta = toCalendarDate(b.fecha) ?? todayAsCalendarDate();
+
+    const abonoInicialId = new Types.ObjectId();
+    const abonos = valorPagado > 0
+      ? [
+          {
+            _id: abonoInicialId,
+            monto: valorPagado,
+            fecha: fechaVenta,
+            metodo: normalizeMetodo(b.metodoPago),
+            referencia: "",
+            notas: "Pago registrado al crear la venta",
+            registradoPor: user.userId,
+            registradoPorNombre: b.vendedorNombre || user.email,
+            createdAt: new Date(),
+          },
+        ]
+      : [];
 
     const cliente = b.clienteId ? await models.masterClientes.findById(b.clienteId).lean() : null;
     const clienteNombre = b.clienteNombre || cliente?.nombreOficial || "";
     const clienteEmail = b.clienteEmail || cliente?.email || "";
 
     const venta = await models.ventasProducto.create({
-      fecha: b.fecha ? new Date(b.fecha) : new Date(),
+      fecha: fechaVenta,
       vendedorNombre: b.vendedorNombre || user.email,
       vendedorId: b.vendedorId || undefined,
       clienteId: b.clienteId || undefined,
@@ -134,20 +228,58 @@ export async function createVenta(req: Request, res: Response, next: NextFunctio
       metodoEntrega,
       valorEnvio,
       metodoPago: b.metodoPago || "",
-      pagoConfirmado: Boolean(b.pagoConfirmado),
+      pagoConfirmado: estadoPago === "pagado",
       subtotal,
       total,
       esCredito,
-      abono,
+      abono: esCredito ? valorPagado : 0,
+      valorPagado,
       saldo,
-      cuotas,
+      estadoPago,
+      abonos,
+      pagoCompletadoEn: estadoPago === "pagado" ? new Date() : undefined,
+      cuotas: settleCuotas(cuotas, total, valorPagado),
       observacion: b.observacion || "",
       creadoPor: user.userId,
+      updatedBy: user.userId,
     });
 
     // Decrement stock best-effort (never blocks the sale).
     if (producto?._id) {
       await models.productosInventario.findByIdAndUpdate(producto._id, { $inc: { stock: -cantidad } }).catch(() => {});
+    }
+
+    // Product sales used to stop at their own screen: nothing reached the ledger,
+    // so Estado de Resultados showed the expense of buying stock and none of the
+    // income from selling it. Income posts as the money arrives, like every other
+    // abono in the system; the commission posts once the sale is fully paid.
+    let ledgerOk = true;
+    if (valorPagado > 0) {
+      try {
+        await postFinancialMovement({
+          direccion: "ingreso",
+          base: "devengado",
+          origen: "venta",
+          origenId: String(venta._id),
+          concepto: `abono:${String(abonoInicialId)}`,
+          categoria: "VENTA_PRODUCTO",
+          monto: valorPagado,
+          estado: "confirmado",
+          fechaOperacion: fechaVenta,
+          fechaPago: fechaVenta,
+          clienteId: venta.clienteId,
+          asesorId: venta.vendedorId,
+          creadoPor: user.userId,
+          metadata: { ventaId: String(venta._id), abonoId: String(abonoInicialId), saldoPendiente: saldo },
+        });
+        await syncComisionMovement(venta as any, user.userId);
+      } catch (ledgerError) {
+        // The sale happened; refusing the request now would leave stock already
+        // decremented and the operator with no record of it. The failure is
+        // reported back instead of swallowed, so the entry can be replayed.
+        ledgerOk = false;
+        console.error("No se pudo registrar el movimiento contable de la venta", ledgerError);
+      }
     }
 
     // Fire the two emails. Failures are recorded but never fail the request.
@@ -164,7 +296,7 @@ export async function createVenta(req: Request, res: Response, next: NextFunctio
       metodoPago: venta.metodoPago,
       pagoConfirmado: venta.pagoConfirmado,
       esCredito: venta.esCredito,
-      abono: venta.abono,
+      abono: venta.valorPagado,
       saldo: venta.saldo,
       cuotas: venta.cuotas.map((c) => ({ fecha: c.fecha, monto: c.monto })),
       observacion: venta.observacion,
@@ -179,9 +311,148 @@ export async function createVenta(req: Request, res: Response, next: NextFunctio
     venta.correoClienteEnviado = clienteRes.success;
     await venta.save();
 
-    res.status(201).json({ item: venta, correos: { admin: adminRes.success, cliente: clienteRes.success } });
+    res.status(201).json({
+      item: venta,
+      correos: { admin: adminRes.success, cliente: clienteRes.success },
+      contabilidad: ledgerOk,
+    });
   } catch (error) {
     next(error);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Editing a sale and its payments                                     */
+/* ------------------------------------------------------------------ */
+
+export async function getVenta(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const venta = await models.ventasProducto
+      .findById(req.params.id)
+      .populate("abonos.registradoPor", "name email")
+      .lean();
+    if (!venta) return void res.status(404).json({ error: "Venta not found" });
+    res.status(200).json({ item: venta });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Correct a sale after the fact.
+ *
+ * A sale was write-once, so a wrong price or a mistyped quantity could only be
+ * lived with. Re-pricing moves the total, and the balance follows it — but never
+ * below what has already been collected: money that came in is a fact, and a
+ * total that contradicts it would be the sale owing the client. That case is
+ * refused with the figure to fix, rather than clamped into a silent mismatch.
+ */
+export async function updateVenta(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
+
+    const venta = await models.ventasProducto.findById(req.params.id).lean();
+    if (!venta) return void res.status(404).json({ error: "Venta not found" });
+
+    const b = req.body || {};
+    const updates: Record<string, any> = {};
+
+    if (b.fecha !== undefined) updates.fecha = toCalendarDate(b.fecha) ?? todayAsCalendarDate();
+    if (b.vendedorNombre !== undefined) updates.vendedorNombre = String(b.vendedorNombre || "");
+    if (b.vendedorId !== undefined) updates.vendedorId = b.vendedorId || undefined;
+    if (b.clienteId !== undefined) updates.clienteId = b.clienteId || undefined;
+    if (b.clienteNombre !== undefined) updates.clienteNombre = String(b.clienteNombre || "");
+    if (b.clienteEmail !== undefined) updates.clienteEmail = String(b.clienteEmail || "");
+    if (b.metodoPago !== undefined) updates.metodoPago = String(b.metodoPago || "");
+    if (b.observacion !== undefined) updates.observacion = String(b.observacion || "");
+    if (b.comisionUnitaria !== undefined) updates.comisionUnitaria = Math.max(toMoney(b.comisionUnitaria), 0);
+    if (b.costoUnitario !== undefined) updates.costoUnitario = Math.max(toMoney(b.costoUnitario), 0);
+    if (b.precioModo !== undefined) updates.precioModo = b.precioModo === "manual" ? "manual" : "automatico";
+    if (b.metodoEntrega !== undefined && METODOS_ENTREGA.includes(b.metodoEntrega)) {
+      updates.metodoEntrega = b.metodoEntrega;
+    }
+    if (b.cantidad !== undefined) updates.cantidad = Math.max(Number(b.cantidad) || 1, 1);
+    if (b.precioUnitario !== undefined) updates.precioUnitario = Math.max(toMoney(b.precioUnitario), 0);
+    if (b.valorEnvio !== undefined) updates.valorEnvio = Math.max(toMoney(b.valorEnvio), 0);
+    if (b.esCredito !== undefined) updates.esCredito = Boolean(b.esCredito);
+    if (b.cuotas !== undefined) updates.cuotas = normalizeCuotas(b.cuotas);
+
+    const cantidad = updates.cantidad ?? venta.cantidad;
+    const precioUnitario = updates.precioUnitario ?? venta.precioUnitario;
+    const valorEnvio = updates.valorEnvio ?? venta.valorEnvio;
+    const metodoEntrega = updates.metodoEntrega ?? venta.metodoEntrega;
+
+    const subtotal = toMoney(precioUnitario * cantidad);
+    const total = toMoney(subtotal + (metodoEntrega === "envio" ? valorEnvio : 0));
+    const valorPagado = toMoney(venta.valorPagado);
+
+    if (total < valorPagado) {
+      return void res.status(400).json({
+        error: `El total ($${total.toFixed(2)}) no puede quedar por debajo de lo ya cobrado ($${valorPagado.toFixed(2)}). Elimina o corrige los abonos primero.`,
+      });
+    }
+
+    const estadoPago = estadoPagoFor(total, valorPagado);
+    updates.subtotal = subtotal;
+    updates.total = total;
+    updates.saldo = toMoney(total - valorPagado);
+    updates.estadoPago = estadoPago;
+    updates.pagoConfirmado = estadoPago === "pagado";
+    updates.cuotas = settleCuotas(updates.cuotas ?? venta.cuotas ?? [], total, valorPagado);
+    updates.updatedBy = user.userId;
+
+    const updated = await models.ventasProducto
+      .findByIdAndUpdate(req.params.id, { $set: updates }, { new: true, runValidators: true })
+      .lean();
+    if (!updated) return void res.status(404).json({ error: "Venta not found" });
+
+    // Re-pricing changes what the seller earned, so the commission movement is
+    // reconciled against the new figure rather than left on the old one.
+    await syncComisionMovement(updated as any, user.userId);
+
+    res.status(200).json({ item: updated });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function registrarAbono(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
+
+    const venta = await registrarAbonoVenta(
+      String(req.params.id),
+      {
+        monto: Number(req.body?.monto),
+        fecha: req.body?.fecha,
+        metodo: req.body?.metodo,
+        referencia: req.body?.referencia,
+        notas: req.body?.notas,
+      },
+      user.userId,
+      user.email
+    );
+    if (!venta) return void res.status(404).json({ error: "Venta not found" });
+    res.status(200).json({ item: venta });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo registrar el abono";
+    res.status(400).json({ error: message });
+  }
+}
+
+export async function eliminarAbono(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = getUser(req);
+    if (!user) return void res.status(401).json({ error: "Unauthorized" });
+
+    const venta = await eliminarAbonoVenta(String(req.params.id), String(req.params.abonoId), user.userId);
+    if (!venta) return void res.status(404).json({ error: "Venta not found" });
+    res.status(200).json({ item: venta });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo eliminar el abono";
+    res.status(400).json({ error: message });
   }
 }
 

@@ -27,6 +27,18 @@ const gastoTotalExpression = {
   $cond: [{ $gt: ["$valorTotal", 0] }, "$valorTotal", "$monto"],
 };
 
+/**
+ * What a record still owes. `valorPagado` was captured from the first day and
+ * then never read back: the detail card printed "Valor pagado $0.00" and left
+ * the operator to do the subtraction, so "¿cuánto debo?" was a question the
+ * ledger held the answer to but never gave. Clamped at zero — an overpayment is
+ * a data-entry problem, not a negative debt.
+ */
+const gastoPagadoExpression = { $ifNull: ["$valorPagado", 0] };
+const gastoPendienteExpression = {
+  $max: [{ $subtract: [gastoTotalExpression, gastoPagadoExpression] }, 0],
+};
+
 async function resolveProveedor(proveedor?: string) {
   const input = canonicalProveedorNombre(proveedor || "");
   if (!input) return null;
@@ -73,9 +85,14 @@ function sectionFilter(seccion: unknown): Record<string, any> {
 
 export async function listGastos(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { tipo, categoria, proveedor, desde, hasta, limit, offset, seccion } = req.query;
+    const { tipo, categoria, proveedor, desde, hasta, limit, offset, seccion, soloPendientes } = req.query;
     const query: Record<string, any> = sectionFilter(seccion);
     if (tipo) query.tipo = tipo;
+    // Records predating the paid/owed split have no `valorPagado` at all, so an
+    // absent field counts as nothing paid rather than dropping out of the list.
+    if (soloPendientes === "true") {
+      query.$expr = { $gt: [gastoTotalExpression, { $ifNull: ["$valorPagado", 0] }] };
+    }
     if (categoria) query.categoria = categoria;
     if (proveedor) query.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     if (desde || hasta) {
@@ -89,7 +106,7 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
     const take = Math.min(parseInt(limit as string) || 50, 200);
     const skip = parseInt(offset as string) || 0;
 
-    const [gastos, total] = await Promise.all([
+    const [gastos, total, totales] = await Promise.all([
       models.gastos
         .find(query)
         .populate("creadoPor", "name email")
@@ -99,9 +116,31 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
         .limit(take)
         .lean(),
       models.gastos.countDocuments(query),
+      models.gastos.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: null,
+            monto: { $sum: gastoTotalExpression },
+            pagado: { $sum: gastoPagadoExpression },
+            pendiente: { $sum: gastoPendienteExpression },
+            conSaldo: { $sum: { $cond: [{ $gt: [gastoPendienteExpression, 0] }, 1, 0] } },
+          },
+        },
+      ]),
     ]);
 
-    res.status(200).json({ gastos, total });
+    const agg = totales[0] || {};
+    res.status(200).json({
+      gastos,
+      total,
+      saldos: {
+        monto: Number((Number(agg.monto) || 0).toFixed(2)),
+        pagado: Number((Number(agg.pagado) || 0).toFixed(2)),
+        pendiente: Number((Number(agg.pendiente) || 0).toFixed(2)),
+        conSaldo: Number(agg.conSaldo || 0),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -365,6 +404,9 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
           $group: {
             _id: null,
             total: { $sum: gastoTotalExpression },
+            pagado: { $sum: gastoPagadoExpression },
+            pendiente: { $sum: gastoPendienteExpression },
+            conSaldo: { $sum: { $cond: [{ $gt: [gastoPendienteExpression, 0] }, 1, 0] } },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
             paquetes: { $sum: "$numeroPaquetes" },
@@ -413,6 +455,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
           $group: {
             _id: "$proveedor",
             total: { $sum: gastoTotalExpression },
+            pendiente: { $sum: gastoPendienteExpression },
             facturas: { $sum: 1 },
           },
         },
@@ -421,7 +464,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
       ]),
     ]);
 
-    const total = totales[0] || { total: 0, facturas: 0, libras: 0, paquetes: 0 };
+    const total = totales[0] || { total: 0, pagado: 0, pendiente: 0, conSaldo: 0, facturas: 0, libras: 0, paquetes: 0 };
     // What a pound actually cost over the period. On the receptions tab this is the
     // number Oscar is checking his supplier against, and it has to come from the
     // totals rather than from averaging each record's rate, which would weight a

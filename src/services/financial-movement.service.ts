@@ -3,7 +3,7 @@ import { models } from "../models/index";
 export interface FinancialMovementInput {
   direccion: "ingreso" | "egreso";
   base: "devengado" | "caja";
-  origen: "gestion" | "envio" | "factura" | "caja" | "gasto" | "pago";
+  origen: "gestion" | "envio" | "factura" | "caja" | "gasto" | "pago" | "venta";
   origenId: string;
   concepto: string;
   categoria: string;

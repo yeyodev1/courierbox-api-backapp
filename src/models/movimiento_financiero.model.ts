@@ -3,7 +3,7 @@ import mongoose, { Schema, type Document } from "mongoose";
 export interface IMovimientoFinanciero extends Document {
   direccion: "ingreso" | "egreso";
   base: "devengado" | "caja";
-  origen: "gestion" | "envio" | "factura" | "caja" | "gasto" | "pago";
+  origen: "gestion" | "envio" | "factura" | "caja" | "gasto" | "pago" | "venta";
   origenId: string;
   concepto: string;
   categoria: string;
@@ -24,7 +24,7 @@ const movimientoFinancieroSchema = new Schema<IMovimientoFinanciero>(
   {
     direccion: { type: String, enum: ["ingreso", "egreso"], required: true },
     base: { type: String, enum: ["devengado", "caja"], required: true },
-    origen: { type: String, enum: ["gestion", "envio", "factura", "caja", "gasto", "pago"], required: true },
+    origen: { type: String, enum: ["gestion", "envio", "factura", "caja", "gasto", "pago", "venta"], required: true },
     origenId: { type: String, required: true },
     concepto: { type: String, required: true },
     categoria: { type: String, required: true },
