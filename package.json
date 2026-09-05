@@ -14,7 +14,8 @@
     "test": "vitest run",
     "playwright:install": "playwright install chromium",
     "providers:dedupe": "tsx src/scripts/dedupe-proveedores.ts",
-    "purchases:migrate": "node -e \"console.error('Migracion masiva deshabilitada: PurchaseOrder convive como historico de solo lectura'); process.exit(1)\""
+    "purchases:migrate": "node -e \"console.error('Migracion masiva deshabilitada: PurchaseOrder convive como historico de solo lectura'); process.exit(1)\"",
+    "ventas:backfill-pagos": "tsx src/scripts/backfill-ventas-pagos.ts"
   },
   "dependencies": {
     "@sparticuz/chromium": "^148.0.0",

@@ -5,7 +5,46 @@ export const METODOS_ENTREGA: MetodoEntrega[] = ["envio", "retiro_oficina"];
 
 export type PrecioModo = "automatico" | "manual";
 
-/** One scheduled installment when the sale is sold on credit (abono + saldo). */
+export type VentaAbonoMetodo = "efectivo" | "transferencia" | "tarjeta" | "deposito" | "otro";
+export const VENTA_ABONO_METODOS: VentaAbonoMetodo[] = [
+  "efectivo",
+  "transferencia",
+  "tarjeta",
+  "deposito",
+  "otro",
+];
+
+/**
+ * A sale is paid or it is owed, and the difference is arithmetic — not a flag.
+ *
+ * `pagoConfirmado` used to be the whole story for a cash sale and `abono` the
+ * whole story for a credit one, both written once at the till and never
+ * touched again. A sale handed over without the money reported `saldo: 0`,
+ * because `saldo` only existed when `esCredito` was set, so "¿cuánto me deben
+ * por ventas?" had no answer in the data and a client who came back to pay had
+ * nowhere to put the second figure.
+ *
+ * Every sale now carries `valorPagado` and `saldo`, credit or not, and every
+ * payment is an entry in `abonos` — the deposit taken at the till is simply the
+ * first one. `estadoPago` follows the balance, and `pagoConfirmado` is kept in
+ * step for the email templates that still read it.
+ */
+export type VentaEstadoPago = "pendiente" | "parcial" | "pagado";
+
+/** One payment against a sale, kept whole: who took it, when, and how. */
+export interface IVentaAbono {
+  _id: mongoose.Types.ObjectId;
+  monto: number;
+  fecha: Date;
+  metodo: VentaAbonoMetodo;
+  referencia: string;
+  notas: string;
+  registradoPor?: mongoose.Types.ObjectId;
+  registradoPorNombre: string;
+  createdAt: Date;
+}
+
+/** One scheduled installment when the sale is sold on credit. */
 export interface ICuotaCredito {
   fecha: Date;
   monto: number;
@@ -33,20 +72,43 @@ export interface IVentaProducto extends Document {
   metodoEntrega: MetodoEntrega;
   valorEnvio: number;
   metodoPago: string;
+  /** Derived from `estadoPago`; kept for the email templates that read it. */
   pagoConfirmado: boolean;
   subtotal: number;
   total: number;
   esCredito: boolean;
+  /** Legacy: the deposit taken at the till. Superseded by `abonos`. */
   abono: number;
+  /** Everything collected so far, across every abono. */
+  valorPagado: number;
+  /** `total - valorPagado`, on every sale rather than only on credit ones. */
   saldo: number;
+  estadoPago: VentaEstadoPago;
+  abonos: IVentaAbono[];
+  pagoCompletadoEn?: Date;
   cuotas: ICuotaCredito[];
   observacion: string;
   correoAdminEnviado: boolean;
   correoClienteEnviado: boolean;
   creadoPor: mongoose.Types.ObjectId;
+  updatedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const abonoSchema = new Schema<IVentaAbono>(
+  {
+    monto: { type: Number, required: true, min: 0 },
+    fecha: { type: Date, required: true },
+    metodo: { type: String, enum: VENTA_ABONO_METODOS, default: "efectivo" },
+    referencia: { type: String, default: "" },
+    notas: { type: String, default: "" },
+    registradoPor: { type: Schema.Types.ObjectId, ref: "User" },
+    registradoPorNombre: { type: String, default: "" },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
 
 const cuotaSchema = new Schema<ICuotaCredito>(
   {
@@ -81,17 +143,24 @@ const ventaProductoSchema = new Schema<IVentaProducto>(
     total: { type: Number, default: 0, min: 0 },
     esCredito: { type: Boolean, default: false },
     abono: { type: Number, default: 0, min: 0 },
+    valorPagado: { type: Number, default: 0, min: 0 },
     saldo: { type: Number, default: 0, min: 0 },
+    estadoPago: { type: String, enum: ["pendiente", "parcial", "pagado"], default: "pendiente" },
+    abonos: { type: [abonoSchema], default: [] },
+    pagoCompletadoEn: { type: Date },
     cuotas: { type: [cuotaSchema], default: [] },
     observacion: { type: String, default: "" },
     correoAdminEnviado: { type: Boolean, default: false },
     correoClienteEnviado: { type: Boolean, default: false },
     creadoPor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    updatedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true, versionKey: false }
 );
 
 ventaProductoSchema.index({ fecha: -1 });
 ventaProductoSchema.index({ "cuotas.fecha": 1, "cuotas.pagada": 1 });
+/** Drives the "quién me debe" list without scanning the whole collection. */
+ventaProductoSchema.index({ estadoPago: 1, fecha: -1 });
 
 export const VentaProducto = mongoose.model<IVentaProducto>("VentaProducto", ventaProductoSchema);

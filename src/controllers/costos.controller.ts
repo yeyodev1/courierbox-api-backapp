@@ -3,6 +3,7 @@ import { models } from "../models/index";
 import { postFinancialMovement, reverseFinancialMovements } from "../services/financial-movement.service";
 import { deleteCloudinaryAsset, extractCloudinaryAssetRef, uploadGastoFactura } from "../services/upload.service";
 import { canonicalProveedorNombre, normalizeProveedorNombre } from "../services/proveedor-normalize";
+import { endOfCalendarDate, toCalendarDate, todayAsCalendarDate } from "../utils/calendar-date";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -24,6 +25,18 @@ function calculateValorTotal(libras: unknown, valorPorLibra: unknown, fallback: 
 
 const gastoTotalExpression = {
   $cond: [{ $gt: ["$valorTotal", 0] }, "$valorTotal", "$monto"],
+};
+
+/**
+ * What a record still owes. `valorPagado` was captured from the first day and
+ * then never read back: the detail card printed "Valor pagado $0.00" and left
+ * the operator to do the subtraction, so "¿cuánto debo?" was a question the
+ * ledger held the answer to but never gave. Clamped at zero — an overpayment is
+ * a data-entry problem, not a negative debt.
+ */
+const gastoPagadoExpression = { $ifNull: ["$valorPagado", 0] };
+const gastoPendienteExpression = {
+  $max: [{ $subtract: [gastoTotalExpression, gastoPagadoExpression] }, 0],
 };
 
 async function resolveProveedor(proveedor?: string) {
@@ -49,27 +62,51 @@ async function resolveProveedor(proveedor?: string) {
   return created.toObject();
 }
 
+/**
+ * Cost Centre splits the ledger three ways: general expenses, shipping expenses,
+ * and receptions — the cargo Courier Box pays for by the pound. What separates a
+ * reception is that it carries weight, so the split is by weight rather than by a
+ * migration: every expense filed before the split still lands in the section it
+ * belongs to, and nothing had to be rewritten to get there.
+ *
+ * `logistico` predates the split and no longer has a tab of its own; without
+ * weight it reads as a general expense, which is what those records are.
+ */
+const SECTION_FILTERS: Record<string, Record<string, any>> = {
+  generales: { tipo: { $in: ["operacional", "logistico"] }, libras: { $not: { $gt: 0 } } },
+  envios: { tipo: "envio" },
+  recepciones: { $or: [{ tipo: "recepcion" }, { libras: { $gt: 0 } }] },
+};
+
+function sectionFilter(seccion: unknown): Record<string, any> {
+  const filter = SECTION_FILTERS[String(seccion || "")];
+  return filter ? { ...filter } : {};
+}
+
 export async function listGastos(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { tipo, categoria, proveedor, desde, hasta, limit, offset } = req.query;
-    const query: Record<string, any> = {};
+    const { tipo, categoria, proveedor, desde, hasta, limit, offset, seccion, soloPendientes } = req.query;
+    const query: Record<string, any> = sectionFilter(seccion);
     if (tipo) query.tipo = tipo;
+    // Records predating the paid/owed split have no `valorPagado` at all, so an
+    // absent field counts as nothing paid rather than dropping out of the list.
+    if (soloPendientes === "true") {
+      query.$expr = { $gt: [gastoTotalExpression, { $ifNull: ["$valorPagado", 0] }] };
+    }
     if (categoria) query.categoria = categoria;
     if (proveedor) query.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     if (desde || hasta) {
       query.fecha = {};
-      if (desde) query.fecha.$gte = new Date(desde as string);
-      if (hasta) {
-        const end = new Date(hasta as string);
-        end.setHours(23, 59, 59, 999);
-        query.fecha.$lte = end;
-      }
+      const from = toCalendarDate(desde);
+      const to = endOfCalendarDate(hasta);
+      if (from) query.fecha.$gte = from;
+      if (to) query.fecha.$lte = to;
     }
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
     const skip = parseInt(offset as string) || 0;
 
-    const [gastos, total] = await Promise.all([
+    const [gastos, total, totales] = await Promise.all([
       models.gastos
         .find(query)
         .populate("creadoPor", "name email")
@@ -79,9 +116,31 @@ export async function listGastos(req: Request, res: Response, next: NextFunction
         .limit(take)
         .lean(),
       models.gastos.countDocuments(query),
+      models.gastos.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: null,
+            monto: { $sum: gastoTotalExpression },
+            pagado: { $sum: gastoPagadoExpression },
+            pendiente: { $sum: gastoPendienteExpression },
+            conSaldo: { $sum: { $cond: [{ $gt: [gastoPendienteExpression, 0] }, 1, 0] } },
+          },
+        },
+      ]),
     ]);
 
-    res.status(200).json({ gastos, total });
+    const agg = totales[0] || {};
+    res.status(200).json({
+      gastos,
+      total,
+      saldos: {
+        monto: Number((Number(agg.monto) || 0).toFixed(2)),
+        pagado: Number((Number(agg.pagado) || 0).toFixed(2)),
+        pendiente: Number((Number(agg.pendiente) || 0).toFixed(2)),
+        conSaldo: Number(agg.conSaldo || 0),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -127,11 +186,19 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       valorPorLibra,
       valorTotal,
       valorPagado,
+      numeroPaquetes,
       idempotencyKey,
     } = req.body;
 
     if (!tipo || !categoria || monto === undefined || !descripcion) {
       res.status(400).json({ error: "tipo, categoria, monto, descripcion are required" });
+      return;
+    }
+    // A reception exists to record what a pound costs; without both figures the
+    // rate cannot be derived and the record would be indistinguishable from a
+    // plain expense, which is the mixing Cost Centre was built to undo.
+    if (tipo === "recepcion" && !(toNumber(libras) > 0 && toNumber(valorPorLibra) > 0)) {
+      res.status(400).json({ error: "Una recepción necesita libras y valor por libra mayores a cero" });
       return;
     }
     if (idempotencyKey) {
@@ -146,14 +213,15 @@ export async function createGasto(req: Request, res: Response, next: NextFunctio
       categoria,
       monto,
       descripcion,
-      fecha: fecha ? new Date(fecha) : new Date(),
+      fecha: toCalendarDate(fecha) ?? todayAsCalendarDate(),
       proveedor: proveedorResolved?.nombre || proveedor || "",
       proveedorId: proveedorResolved?._id,
       referencia: referencia || "",
       numeroFactura: numeroFactura || "",
-      fechaFactura: fechaFactura ? new Date(fechaFactura) : undefined,
+      fechaFactura: toCalendarDate(fechaFactura),
       libras: toNumber(libras),
       valorPorLibra: toNumber(valorPorLibra),
+      numeroPaquetes: toNumber(numeroPaquetes),
       valorTotal: calculateValorTotal(libras, valorPorLibra, toNumber(valorTotal) || toNumber(monto)),
       valorPagado: toNumber(valorPagado),
       paqueteId: paqueteId || undefined,
@@ -199,6 +267,7 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
     const allowedFields = [
       "tipo", "categoria", "monto", "descripcion", "fecha", "proveedor", "referencia",
       "paqueteId", "numeroFactura", "fechaFactura", "libras", "valorPorLibra", "valorTotal", "valorPagado",
+      "numeroPaquetes",
     ];
     const updates = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => allowedFields.includes(key))) as Record<string, any>;
 
@@ -208,6 +277,9 @@ export async function updateGasto(req: Request, res: Response, next: NextFunctio
       updates.proveedorId = proveedorResolved?._id;
     }
 
+    if (updates.fecha !== undefined) updates.fecha = toCalendarDate(updates.fecha) ?? todayAsCalendarDate();
+    if (updates.fechaFactura !== undefined) updates.fechaFactura = toCalendarDate(updates.fechaFactura);
+    if (updates.numeroPaquetes !== undefined) updates.numeroPaquetes = toNumber(updates.numeroPaquetes);
     if (updates.libras !== undefined) updates.libras = toNumber(updates.libras);
     if (updates.valorPorLibra !== undefined) updates.valorPorLibra = toNumber(updates.valorPorLibra);
     if (updates.valorPagado !== undefined) updates.valorPagado = toNumber(updates.valorPagado);
@@ -312,17 +384,18 @@ export async function uploadGastoArchivo(req: Request, res: Response, next: Next
 
 export async function resumenGastos(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { tipo, categoria, proveedor, desde, hasta } = _req.query;
+    const { tipo, categoria, proveedor, desde, hasta, seccion } = _req.query;
     const now = new Date();
     const desdeDefault = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
-    const match: Record<string, any> = {};
+    const match: Record<string, any> = sectionFilter(seccion);
     if (tipo) match.tipo = tipo;
     if (categoria) match.categoria = categoria;
     if (proveedor) match.proveedor = new RegExp(String(proveedor).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     match.fecha = {};
-    match.fecha.$gte = desde ? new Date(String(desde)) : desdeDefault;
-    if (hasta) match.fecha.$lte = new Date(String(hasta));
+    match.fecha.$gte = toCalendarDate(desde) ?? desdeDefault;
+    const hastaFecha = endOfCalendarDate(hasta);
+    if (hastaFecha) match.fecha.$lte = hastaFecha;
 
     const [totales, porTipo, porMes, porCategoria, porProveedor] = await Promise.all([
       models.gastos.aggregate([
@@ -331,8 +404,12 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
           $group: {
             _id: null,
             total: { $sum: gastoTotalExpression },
+            pagado: { $sum: gastoPagadoExpression },
+            pendiente: { $sum: gastoPendienteExpression },
+            conSaldo: { $sum: { $cond: [{ $gt: [gastoPendienteExpression, 0] }, 1, 0] } },
             facturas: { $sum: 1 },
             libras: { $sum: "$libras" },
+            paquetes: { $sum: "$numeroPaquetes" },
           },
         },
       ]),
@@ -378,6 +455,7 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
           $group: {
             _id: "$proveedor",
             total: { $sum: gastoTotalExpression },
+            pendiente: { $sum: gastoPendienteExpression },
             facturas: { $sum: 1 },
           },
         },
@@ -386,9 +464,18 @@ export async function resumenGastos(_req: Request, res: Response, next: NextFunc
       ]),
     ]);
 
+    const total = totales[0] || { total: 0, pagado: 0, pendiente: 0, conSaldo: 0, facturas: 0, libras: 0, paquetes: 0 };
+    // What a pound actually cost over the period. On the receptions tab this is the
+    // number Oscar is checking his supplier against, and it has to come from the
+    // totals rather than from averaging each record's rate, which would weight a
+    // 12 lb parcel the same as a 126 lb one.
+    const costoPorLibra = Number(total.libras) > 0
+      ? Number((Number(total.total) / Number(total.libras)).toFixed(4))
+      : 0;
+
     res.status(200).json({
       resumen: {
-        total: totales[0] || { total: 0, facturas: 0, libras: 0 },
+        total: { ...total, costoPorLibra },
         porTipo,
         porMes,
         porCategoria,

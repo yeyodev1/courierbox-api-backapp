@@ -1,7 +1,7 @@
 import mongoose, { Schema, type Document } from "mongoose";
 
 export interface IGasto extends Document {
-  tipo: "operacional" | "logistico" | "envio";
+  tipo: "operacional" | "logistico" | "envio" | "recepcion";
   categoria: string;
   monto: number;
   descripcion: string;
@@ -16,6 +16,7 @@ export interface IGasto extends Document {
   fechaFactura?: Date;
   libras: number;
   valorPorLibra: number;
+  numeroPaquetes: number;
   valorTotal: number;
   valorPagado: number;
   paqueteId?: mongoose.Types.ObjectId;
@@ -30,7 +31,7 @@ const gastoSchema = new Schema<IGasto>(
   {
     tipo: {
       type: String,
-      enum: ["operacional", "logistico", "envio"],
+      enum: ["operacional", "logistico", "envio", "recepcion"],
       required: true,
     },
     categoria: { type: String, required: true },
@@ -47,6 +48,7 @@ const gastoSchema = new Schema<IGasto>(
     fechaFactura: { type: Date },
     libras: { type: Number, default: 0, min: 0 },
     valorPorLibra: { type: Number, default: 0, min: 0 },
+    numeroPaquetes: { type: Number, default: 0, min: 0 },
     valorTotal: { type: Number, default: 0, min: 0 },
     valorPagado: { type: Number, default: 0, min: 0 },
     paqueteId: { type: Schema.Types.ObjectId, ref: "Paquete" },
@@ -58,6 +60,8 @@ const gastoSchema = new Schema<IGasto>(
 );
 
 gastoSchema.index({ tipo: 1, fecha: -1 });
+// Cost Centre splits receptions off by weight, so the section filter can use an index.
+gastoSchema.index({ libras: 1, fecha: -1 });
 gastoSchema.index({ fecha: -1 });
 gastoSchema.index({ categoria: 1 });
 gastoSchema.index({ proveedor: 1, fecha: -1 });

@@ -78,6 +78,8 @@ function buildExportRows(gestiones: any[]) {
     const comision = Number(g.valorComision || 0);
     const costoVenta = Number(g.costoVenta || 0);
     const margenNeto = valorTotal - comision - costoVenta;
+    const pagado = Number(g.valorPagado || 0);
+    const saldoPendiente = Math.max(0, valorTotal - pagado);
 
     return {
       Fecha: g.createdAt ? new Date(g.createdAt).toLocaleDateString("es-EC") : "—",
@@ -92,6 +94,9 @@ function buildExportRows(gestiones: any[]) {
       Comision: safeMoney(comision),
       "Costo Venta": safeMoney(costoVenta),
       "Margen Neto": safeMoney(margenNeto),
+      Pagado: safeMoney(pagado),
+      "Saldo Pendiente": safeMoney(saldoPendiente),
+      Abonos: Array.isArray(g.abonos) ? g.abonos.length : 0,
       Reserva: safeMoney(g.valorReserva),
       "Reserva Confirmada": g.reservaConfirmada ? "Sí" : "No",
       Pagina: g.paginaCompra || "—",
@@ -107,7 +112,7 @@ const ADMIN_ROLES = ["admin", "superadmin", "gerencia"];
 
 function withoutFinancials(gestion: any) {
   const {
-    valorTotal, valorReserva, valorPagado, costoVenta, valorComision, cuentaBancariaId,
+    valorTotal, valorReserva, valorPagado, abonos, costoVenta, valorComision, cuentaBancariaId,
     feeConfigId, comprobantePagoUrl, pagoConfirmadoPor, ...safe
   } = gestion;
   return {
@@ -618,6 +623,38 @@ export async function confirmarPago(req: Request, res: Response, next: NextFunct
     if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada o pago ya confirmado" });
     res.json({ gestion });
   } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/v1/gestiones-compra/:id/abonos */
+export async function registrarAbono(req: Request, res: Response, next: NextFunction) {
+  try {
+    const auth = await resolveUserIdentity(req.user);
+    if (!auth) return void res.status(401).json({ error: "Unauthorized" });
+
+    const gestion = await GestionCompraService.registrarAbono(
+      String(req.params.id),
+      {
+        monto: Number(req.body.monto),
+        fecha: req.body.fecha,
+        metodo: req.body.metodo,
+        referencia: req.body.referencia,
+        notas: req.body.notas,
+      },
+      auth.userId,
+      auth.userName
+    );
+    if (!gestion) return void res.status(404).json({ error: "Gestión no encontrada" });
+    res.json({ gestion });
+  } catch (err) {
+    // The balance rules are the operator's to fix, not a server fault: an abono
+    // over the balance or on a settled gestión has to come back as a 400 with the
+    // reason, or the screen can only say "algo salió mal".
+    const message = err instanceof Error ? err.message : "";
+    if (/abono|saldo|pagada|cancelada/i.test(message)) {
+      return void res.status(400).json({ error: message });
+    }
     next(err);
   }
 }
