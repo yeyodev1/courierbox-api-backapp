@@ -841,21 +841,45 @@ export async function registrarRecepcionBodega(
   return updated;
 }
 
+/**
+ * Sugerencia de comisión para el wizard.
+ *
+ * Devolvía 0 tanto cuando la regla decía 0 como cuando no había regla o la
+ * consulta fallaba, y el wizard guardaba ese 0 sin avisar: de ahí las gestiones
+ * que quedaban con comisión en cero. `calculada` separa los dos casos para que
+ * la pantalla pida el valor a mano en vez de inventar un cero.
+ */
 export async function calcularComisionPreview(
   valorTotal: number,
   feeConfigId?: string
-): Promise<{ valorComision: number; feeConfigNombre: string }> {
+): Promise<{ valorComision: number; feeConfigNombre: string; calculada: boolean; motivo?: string }> {
   try {
     const result = await calculateFee({
       productValue: valorTotal,
       shippingValue: 0,
       configId: feeConfigId,
     });
+
+    if (result.ruleType === "none") {
+      return {
+        valorComision: 0,
+        feeConfigNombre: result.configName ?? "Sin configurar",
+        calculada: false,
+        motivo: "El administrador aún no configura una regla de comisión.",
+      };
+    }
+
     return {
       valorComision: result.feeAmount,
       feeConfigNombre: result.configName ?? "Regla por defecto",
+      calculada: true,
     };
   } catch {
-    return { valorComision: 0, feeConfigNombre: "Sin regla" };
+    return {
+      valorComision: 0,
+      feeConfigNombre: "Sin regla",
+      calculada: false,
+      motivo: "No se pudo calcular la comisión sugerida.",
+    };
   }
 }

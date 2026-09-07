@@ -142,15 +142,25 @@ export async function resumenCaja(_req: Request, res: Response, next: NextFuncti
     const dateMatch = buildDateMatch(desde, hasta);
     if (dateMatch) match.fecha = dateMatch;
 
-    const [ingresos, egresos, porTipo, porCategoria] = await Promise.all([
+    // El saldo de caja es el acumulado de toda la historia hasta `hasta`, no el
+    // neto del rango filtrado. La pantalla arranca el filtro el día 1 del mes,
+    // así que el saldo salía negativo: contaba los egresos del mes sin arrastrar
+    // el saldo anterior, y sólo cuadraba si el usuario retrocedía el "Desde"
+    // hasta antes del primer movimiento. El acumulado ignora `desde`, `tipo` y
+    // `categoria` porque el dinero en caja es uno solo, no el de un filtro.
+    const acumuladoMatch: Record<string, any> = {};
+    const acumuladoDate = buildDateMatch(undefined, hasta);
+    if (acumuladoDate) acumuladoMatch.fecha = acumuladoDate;
+
+    const totalesPorTipo = (base: Record<string, any>, direccion: "ingreso" | "egreso") =>
       models.cajaMovimientos.aggregate([
-        { $match: { ...match, tipo: "ingreso" } },
+        { $match: { ...base, tipo: direccion } },
         { $group: { _id: null, total: { $sum: "$monto" }, count: { $sum: 1 } } },
-      ]),
-      models.cajaMovimientos.aggregate([
-        { $match: { ...match, tipo: "egreso" } },
-        { $group: { _id: null, total: { $sum: "$monto" }, count: { $sum: 1 } } },
-      ]),
+      ]);
+
+    const [ingresos, egresos, porCategoria, porTipo, ingresosAcumulados, egresosAcumulados] = await Promise.all([
+      totalesPorTipo(match, "ingreso"),
+      totalesPorTipo(match, "egreso"),
       models.cajaMovimientos.aggregate([
         { $match: match },
         { $group: { _id: "$categoria", total: { $sum: "$monto" }, count: { $sum: 1 } } },
@@ -161,17 +171,32 @@ export async function resumenCaja(_req: Request, res: Response, next: NextFuncti
         { $group: { _id: "$tipo", total: { $sum: "$monto" }, count: { $sum: 1 } } },
         { $sort: { total: -1 } },
       ]),
+      totalesPorTipo(acumuladoMatch, "ingreso"),
+      totalesPorTipo(acumuladoMatch, "egreso"),
     ]);
 
-    const ingresosTotal = ingresos[0] || { total: 0, count: 0 };
-    const egresosTotal = egresos[0] || { total: 0, count: 0 };
+    const primero = (rows: any[]) => ({
+      total: Number(rows?.[0]?.total) || 0,
+      count: Number(rows?.[0]?.count) || 0,
+    });
+
+    const ingresosTotal = primero(ingresos);
+    const egresosTotal = primero(egresos);
+    const ingresosAcumuladosTotal = primero(ingresosAcumulados);
+    const egresosAcumuladosTotal = primero(egresosAcumulados);
 
     res.status(200).json({
       ingresos: ingresosTotal,
       egresos: egresosTotal,
-      saldo: (ingresosTotal.total || 0) - (egresosTotal.total || 0),
-      porTipo: porCategoria,
-      porCategoria: porTipo,
+      saldo: ingresosTotal.total - egresosTotal.total,
+      acumulado: {
+        ingresos: ingresosAcumuladosTotal,
+        egresos: egresosAcumuladosTotal,
+        saldo: ingresosAcumuladosTotal.total - egresosAcumuladosTotal.total,
+        hasta: hasta ? String(hasta) : null,
+      },
+      porTipo,
+      porCategoria,
     });
   } catch (error) {
     next(error);
