@@ -397,9 +397,39 @@ export async function createGestion(req: Request, res: Response, next: NextFunct
       return;
     }
 
-    const calculatedFee = ADMIN_ROLES.includes(role)
-      ? Number(body.valorComision ?? 0)
-      : (await GestionCompraService.calcularComisionPreview(valorTotal, body.feeConfigId)).valorComision;
+    // La comisión nunca puede quedar en cero por descarte. Antes pasaba por dos
+    // lados: `?? 0` convertía el campo vacío de un admin en cero, y para un
+    // asesor el preview pisaba lo que había escrito — devolviendo cero cuando no
+    // había ninguna regla configurada. La regla sigue mandando cuando existe;
+    // cuando no existe, vale lo que se escribió en el wizard, y si no hay ni lo
+    // uno ni lo otro se rechaza en vez de guardar un cero que nadie eligió.
+    const comisionEnviada = body.valorComision;
+    const hayComisionEnviada = comisionEnviada !== undefined && comisionEnviada !== null && comisionEnviada !== "";
+
+    let calculatedFee: number;
+    if (ADMIN_ROLES.includes(role)) {
+      if (!hayComisionEnviada) {
+        res.status(400).json({ error: "valorComision es requerido (puede ser 0)" });
+        return;
+      }
+      calculatedFee = Number(comisionEnviada);
+    } else {
+      const preview = await GestionCompraService.calcularComisionPreview(valorTotal, body.feeConfigId);
+      if (preview.calculada) {
+        calculatedFee = preview.valorComision;
+      } else if (hayComisionEnviada) {
+        calculatedFee = Number(comisionEnviada);
+      } else {
+        res.status(400).json({ error: "valorComision es requerido: no hay una regla de comisión configurada" });
+        return;
+      }
+    }
+
+    if (!Number.isFinite(calculatedFee) || calculatedFee < 0) {
+      res.status(400).json({ error: "valorComision inválido" });
+      return;
+    }
+
     const gestion = await GestionCompraService.createGestionCompra({
       asesorId,
       contactoId: body.contactoId,
