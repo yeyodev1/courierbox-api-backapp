@@ -8,6 +8,7 @@ import {
   buscarClientesMaster,
   postRecalcularNombres,
   postIngresoCarga,
+  postIngresoManual,
 } from "../controllers/etl.controller";
 import { requireAuth, requireRole } from "../middleware/auth.middleware";
 
@@ -19,6 +20,7 @@ etlRouter.use(requireAuth);
 etlRouter.use(requireRole(["admin", "gerencia", "superadmin"]));
 etlRouter.post("/upload", upload.single("file"), uploadExcel);
 etlRouter.post("/ingreso-carga", upload.single("file"), postIngresoCarga);
+etlRouter.post("/ingreso-carga/manual", postIngresoManual);
 etlRouter.get("/pendientes", getPendientes);
 etlRouter.get("/homologacion", getPendientesHomologacion);
 etlRouter.get("/clientes-master", buscarClientesMaster);

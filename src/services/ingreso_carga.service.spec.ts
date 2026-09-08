@@ -25,6 +25,8 @@ vi.mock("../models/index", () => ({
 
 import {
   claveNombre,
+  filasDesdeManual,
+  procesarIngresoManual,
   leerIngresoCarga,
   nombreOficialDesde,
   parsearFecha,
@@ -341,5 +343,45 @@ describe("procesarIngresoCarga — vincular a mano", () => {
     expect(fila.accion).toBe("error");
     expect(fila.detalle).toContain("ya no existe");
     expect(mocks.paquetesCreate).not.toHaveBeenCalledWith(expect.objectContaining({ wr: "WR839943" }));
+  });
+});
+
+describe("ingreso manual, caja por caja", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sinPaquetesPrevios();
+    mocks.clientesExists.mockResolvedValue(null);
+    mocks.aliasesFindOne.mockResolvedValue(null);
+    mocks.clientesCreate.mockImplementation(async (doc: any) => ({ _id: new mongoose.Types.ObjectId(), ...doc }));
+    mocks.paquetesCreate.mockResolvedValue({});
+  });
+
+  it("exige el formato del manifiesto: WR, MG, peso y fecha", () => {
+    const { filas, errores } = filasDesdeManual([
+      { wr: "839943", cliente: "X", peso: 1 },
+      { wr: "WR1", mg: "2516", cliente: "X", peso: 1 },
+      { wr: "WR2", cliente: "X", peso: 0 },
+      { wr: "WR3", cliente: "X", peso: 2, fecha: "no" },
+      { wr: "wr 4", mg: "mg002516", cliente: "  Norma  Bano MP ", peso: "1,5", fecha: "2026-08-25", reempaque: "si", tracking: "_tba1_" },
+    ]);
+    expect(errores).toHaveLength(4);
+    expect(errores[0]).toContain("WR seguido de números");
+    expect(errores[1]).toContain("MG seguido de números");
+    expect(errores[2]).toContain("mayor que 0");
+    expect(errores[3]).toContain("fecha no es válida");
+    expect(filas).toHaveLength(1);
+    expect(filas[0]).toMatchObject({ wr: "WR4", mg: "MG002516", clienteRaw: "Norma Bano MP", pesoLb: 1.5, reempaque: true, tracking: "tba1" });
+    expect(filas[0].fechaIngreso?.toISOString().slice(0, 10)).toBe("2026-08-25");
+  });
+
+  it("pasa por el mismo motor que el Excel: previsualiza sin escribir y aplica creando el cliente", async () => {
+    conClientes([]);
+    const prev = await procesarIngresoManual([{ wr: "WR900", cliente: "ANA PRUEBA", peso: 2, contenido: "zapatos" }], { aplicar: false });
+    expect(prev.filas[0]).toMatchObject({ wr: "WR900", accion: "creado", clienteNombreOficial: "ANA PRUEBA", paquete: "nuevo" });
+    expect(mocks.clientesCreate).not.toHaveBeenCalled();
+
+    const r = await procesarIngresoManual([{ wr: "WR900", cliente: "ANA PRUEBA", peso: 2, contenido: "zapatos" }], { aplicar: true });
+    expect(r.clientesCreados).toBe(1);
+    expect(mocks.paquetesCreate).toHaveBeenCalledWith(expect.objectContaining({ wr: "WR900", contenido: "zapatos", pesoLb: 2, estado: "importado" }));
   });
 });
