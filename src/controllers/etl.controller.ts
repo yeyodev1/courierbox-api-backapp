@@ -6,7 +6,7 @@ import {
   recalcularNombresLimpios,
 } from "../services/etl.service";
 import { models } from "../models/index";
-import { procesarIngresoCarga } from "../services/ingreso_carga.service";
+import { procesarIngresoCarga, type Decisiones } from "../services/ingreso_carga.service";
 
 export async function uploadExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -108,9 +108,25 @@ export async function postIngresoCarga(req: Request, res: Response, next: NextFu
       return;
     }
     const aplicar = ["1", "true", "si"].includes(String(req.query.aplicar ?? "").toLowerCase());
+
+    // Viaja como texto dentro del multipart: { "WR839943": { "masterClienteId": "…" }, … }
+    let decisiones: Decisiones = {};
+    const crudo = req.body?.decisiones;
+    if (crudo) {
+      try {
+        const parsed = typeof crudo === "string" ? JSON.parse(crudo) : crudo;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) decisiones = parsed;
+        else throw new Error("formato");
+      } catch {
+        res.status(400).json({ error: "Las decisiones de vinculación no tienen un formato válido" });
+        return;
+      }
+    }
+
     const resultado = await procesarIngresoCarga(req.file.buffer, {
       aplicar,
       origenNota: req.file.originalname,
+      decisiones,
     });
     res.status(200).json(resultado);
   } catch (err: any) {
