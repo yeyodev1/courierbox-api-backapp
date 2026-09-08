@@ -192,6 +192,157 @@ export function clienteFacturable(c: any): ClienteFacturable {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Perfiles de facturación (a quién se factura)
+// ---------------------------------------------------------------------------
+
+export const PERFIL_PRINCIPAL = "principal";
+
+export interface PerfilFacturacion {
+  id: string;
+  etiqueta: string;
+  identificacion: string;
+  razonSocial: string;
+  email: string;
+  telefono: string;
+  direccion: string;
+  principal: boolean;
+}
+
+function perfilPrincipalDe(c: any): PerfilFacturacion {
+  return {
+    id: PERFIL_PRINCIPAL,
+    etiqueta: "Datos del cliente",
+    identificacion: String(c?.cedulaRuc ?? ""),
+    razonSocial: String(c?.nombreOficial ?? ""),
+    email: String(c?.email ?? ""),
+    telefono: String(c?.telefono ?? ""),
+    direccion: String(c?.direccion ?? ""),
+    principal: true,
+  };
+}
+
+function perfilesDe(c: any): PerfilFacturacion[] {
+  const extras = (Array.isArray(c?.perfilesFacturacion) ? c.perfilesFacturacion : []).map((p: any) => ({
+    id: String(p._id),
+    etiqueta: String(p.etiqueta ?? ""),
+    identificacion: String(p.identificacion ?? ""),
+    razonSocial: String(p.razonSocial ?? ""),
+    email: String(p.email ?? ""),
+    telefono: String(p.telefono ?? ""),
+    direccion: String(p.direccion ?? ""),
+    principal: false,
+  }));
+  return [perfilPrincipalDe(c), ...extras];
+}
+
+/** Los datos con los que sale la factura, según el perfil elegido (principal si no se indica). */
+function datosSegunPerfil(c: any, perfilId?: string): { datos: ClienteFacturable; perfil: PerfilFacturacion } | null {
+  const perfiles = perfilesDe(c);
+  const perfil = perfiles.find((p) => p.id === (perfilId || PERFIL_PRINCIPAL));
+  if (!perfil) return null;
+  const base = clienteFacturable(c);
+  return {
+    perfil,
+    datos: {
+      ...base,
+      nombreOficial: perfil.razonSocial || base.nombreOficial,
+      cedulaRuc: perfil.identificacion,
+      email: perfil.email,
+      telefono: perfil.telefono,
+      direccion: perfil.direccion,
+    },
+  };
+}
+
+export async function listarPerfiles(clienteId: string): Promise<{ exito: true; perfiles: PerfilFacturacion[] } | { exito: false; error: string }> {
+  if (!mongoose.isValidObjectId(clienteId)) return { exito: false, error: "Cliente inválido" };
+  const c = await models.masterClientes.findById(clienteId).lean();
+  if (!c) return { exito: false, error: "Cliente no encontrado" };
+  return { exito: true, perfiles: perfilesDe(c) };
+}
+
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function limpiarPerfil(datos: Partial<Omit<PerfilFacturacion, "id" | "principal">>): { ok: true; valor: Omit<PerfilFacturacion, "id" | "principal"> } | { ok: false; error: string } {
+  const identificacion = soloDigitos(datos.identificacion);
+  if (identificacion && !identificacionValida(identificacion)) return { ok: false, error: "Esa cédula o RUC no es válido." };
+  const razonSocial = String(datos.razonSocial ?? "").trim();
+  if (!razonSocial) return { ok: false, error: "El nombre o razón social no puede quedar vacío." };
+  const email = String(datos.email ?? "").trim().toLowerCase();
+  if (email && !EMAIL_RX.test(email)) return { ok: false, error: `"${email}" no es un correo válido. Revísalo o déjalo vacío.` };
+  return {
+    ok: true,
+    valor: {
+      etiqueta: String(datos.etiqueta ?? "").trim().slice(0, 60),
+      identificacion,
+      razonSocial,
+      email,
+      telefono: String(datos.telefono ?? "").trim(),
+      direccion: String(datos.direccion ?? "").trim(),
+    },
+  };
+}
+
+/**
+ * Crea o edita un perfil de facturación. `perfilId` vacío crea uno nuevo;
+ * "principal" edita los datos del propio cliente.
+ */
+export async function guardarPerfil(
+  clienteId: string,
+  perfilId: string | null,
+  datos: Partial<Omit<PerfilFacturacion, "id" | "principal">>
+): Promise<{ exito: true; perfil: PerfilFacturacion; perfiles: PerfilFacturacion[] } | { exito: false; error: string }> {
+  if (!mongoose.isValidObjectId(clienteId)) return { exito: false, error: "Cliente inválido" };
+  const limpio = limpiarPerfil(datos);
+  if (!limpio.ok) return { exito: false, error: limpio.error };
+  const v = limpio.valor;
+
+  if (!perfilId || perfilId === PERFIL_PRINCIPAL) {
+    const r = await completarDatosCliente(clienteId, {
+      nombreOficial: v.razonSocial,
+      cedulaRuc: v.identificacion,
+      email: v.email,
+      telefono: v.telefono,
+      direccion: v.direccion,
+    });
+    if (!r.exito) return r;
+    if (perfilId === PERFIL_PRINCIPAL) {
+      const c = await models.masterClientes.findById(clienteId).lean();
+      const perfiles = perfilesDe(c);
+      return { exito: true, perfil: perfiles[0]!, perfiles };
+    }
+  }
+
+  if (perfilId && perfilId !== PERFIL_PRINCIPAL) {
+    if (!mongoose.isValidObjectId(perfilId)) return { exito: false, error: "Perfil inválido" };
+    const r = await models.masterClientes.updateOne(
+      { _id: clienteId, "perfilesFacturacion._id": perfilId },
+      { $set: { "perfilesFacturacion.$": { _id: new mongoose.Types.ObjectId(perfilId), ...v } } }
+    );
+    if (!r.matchedCount) return { exito: false, error: "Ese perfil ya no existe" };
+    const c = await models.masterClientes.findById(clienteId).lean();
+    const perfiles = perfilesDe(c);
+    return { exito: true, perfil: perfiles.find((p) => p.id === perfilId)!, perfiles };
+  }
+
+  // perfilId vacío: nuevo perfil alterno
+  const nuevoId = new mongoose.Types.ObjectId();
+  const r = await models.masterClientes.updateOne({ _id: clienteId }, { $push: { perfilesFacturacion: { _id: nuevoId, ...v } } });
+  if (!r.matchedCount) return { exito: false, error: "Cliente no encontrado" };
+  const c = await models.masterClientes.findById(clienteId).lean();
+  const perfiles = perfilesDe(c);
+  return { exito: true, perfil: perfiles.find((p) => p.id === String(nuevoId))!, perfiles };
+}
+
+export async function eliminarPerfil(clienteId: string, perfilId: string): Promise<{ exito: true; perfiles: PerfilFacturacion[] } | { exito: false; error: string }> {
+  if (!mongoose.isValidObjectId(clienteId) || !mongoose.isValidObjectId(perfilId)) return { exito: false, error: "Perfil inválido" };
+  await models.masterClientes.updateOne({ _id: clienteId }, { $pull: { perfilesFacturacion: { _id: new mongoose.Types.ObjectId(perfilId) } } });
+  const c = await models.masterClientes.findById(clienteId).lean();
+  if (!c) return { exito: false, error: "Cliente no encontrado" };
+  return { exito: true, perfiles: perfilesDe(c) };
+}
+
 /**
  * Completa los datos de facturación del cliente desde el counter. La cédula o
  * RUC se valida como lo hará el SRI, y no puede pertenecer a otro cliente.
@@ -308,15 +459,19 @@ async function cargarSeleccion(paqueteIds: string[]) {
 }
 
 /** Lo que el counter necesita ver antes de emitir: cliente, totales y qué falta. */
-export async function validarSeleccion(paqueteIds: string[]) {
+export async function validarSeleccion(paqueteIds: string[], perfilId?: string) {
   const sel = await cargarSeleccion(paqueteIds);
   if ("error" in sel) return { exito: false as const, error: String(sel.error) };
-  const cliente = clienteFacturable(sel.cliente);
+  const resuelto = datosSegunPerfil(sel.cliente, perfilId);
+  if (!resuelto) return { exito: false as const, error: "Ese perfil de facturación ya no existe" };
+  const cliente = resuelto.datos;
   const yaFacturado = sel.paquetes.filter((p) => p.facturaId);
   const validacion = validarClienteParaFactura(cliente, sel.totales.totalGeneral);
   return {
     exito: true as const,
     cliente,
+    perfilId: resuelto.perfil.id,
+    perfiles: perfilesDe(sel.cliente),
     totales: sel.totales,
     tarifas: sel.tarifas,
     ...validacion,
@@ -358,7 +513,7 @@ function resumenFactura(f: any, clienteNombre: string): FacturaEmitida {
  */
 export async function facturarPaquetes(
   paqueteIds: string[],
-  opciones: { consumidorFinal?: boolean } = {}
+  opciones: { consumidorFinal?: boolean; perfilId?: string } = {}
 ): Promise<
   | { exito: true; factura: FacturaEmitida }
   | { exito: false; error: string; faltantes?: DatoFaltante[]; consumidorFinalPosible?: boolean }
@@ -371,7 +526,9 @@ export async function facturarPaquetes(
     return { exito: false, error: "Alguno de esos paquetes ya tiene factura. Actualiza la búsqueda." };
   }
 
-  const datos = clienteFacturable(cliente);
+  const resuelto = datosSegunPerfil(cliente, opciones.perfilId);
+  if (!resuelto) return { exito: false, error: "Ese perfil de facturación ya no existe. Elige otro." };
+  const datos = resuelto.datos;
   const validacion = validarClienteParaFactura(datos, totales.totalGeneral);
   const usaConsumidorFinal = Boolean(opciones.consumidorFinal) && !soloDigitos(datos.cedulaRuc);
   if (usaConsumidorFinal && !validacion.consumidorFinalPosible) {
@@ -423,6 +580,12 @@ export async function facturarPaquetes(
     autorizadaEn: emision.estadoSri === "autorizado" ? new Date() : null,
     sriRevisadoEn: new Date(),
     masterClienteId: cliente._id,
+    facturadoA: {
+      perfilId: resuelto.perfil.id,
+      identificacion: usaConsumidorFinal ? RUC_CONSUMIDOR_FINAL : datos.cedulaRuc,
+      razonSocial: usaConsumidorFinal ? "Consumidor Final" : datos.nombreOficial,
+      email: datos.email,
+    },
     paquetes: paqueteIds,
     pesoTotalLb: pesoTotal,
     totalFlete,

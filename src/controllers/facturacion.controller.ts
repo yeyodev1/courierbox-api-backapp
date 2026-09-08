@@ -6,6 +6,9 @@ import {
   calcularTotales,
   completarDatosCliente,
   obtenerTarifas,
+  listarPerfiles,
+  guardarPerfil,
+  eliminarPerfil,
   facturarPaquetes,
   listarFacturables,
   registrarCobroContifico,
@@ -17,12 +20,12 @@ import { contificoService } from "../services/contifico.service";
 
 export async function generarFactura(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { paqueteIds, consumidorFinal } = req.body;
+    const { paqueteIds, consumidorFinal, perfilId } = req.body;
     if (!Array.isArray(paqueteIds) || paqueteIds.length === 0) {
       res.status(400).json({ error: "Se requiere un array de paqueteIds" });
       return;
     }
-    const result = await facturarPaquetes(paqueteIds, { consumidorFinal: Boolean(consumidorFinal) });
+    const result = await facturarPaquetes(paqueteIds, { consumidorFinal: Boolean(consumidorFinal), perfilId: perfilId ? String(perfilId) : undefined });
     if (!result.exito) {
       // 422: faltan datos del cliente, el counter puede completarlos. 502: Contifico no la aceptó.
       const status = result.faltantes ? 422 : /Contifico/.test(result.error) ? 502 : 400;
@@ -39,12 +42,12 @@ export async function generarFactura(req: Request, res: Response, next: NextFunc
 /** Antes de emitir: cliente, totales y qué le falta para que el SRI la autorice. */
 export async function validarFactura(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { paqueteIds } = req.body;
+    const { paqueteIds, perfilId } = req.body;
     if (!Array.isArray(paqueteIds) || paqueteIds.length === 0) {
       res.status(400).json({ error: "Se requiere un array de paqueteIds" });
       return;
     }
-    const result = await validarSeleccion(paqueteIds);
+    const result = await validarSeleccion(paqueteIds, perfilId ? String(perfilId) : undefined);
     if (!result.exito) {
       res.status(400).json({ error: result.error });
       return;
@@ -90,6 +93,47 @@ export async function putConfiguracionFacturacion(req: Request, res: Response, n
       res.status(400).json({ error: err.message });
       return;
     }
+    next(err);
+  }
+}
+
+/** Los datos de facturación de un cliente: los suyos y los alternos (empresa, familiar…). */
+export async function getPerfilesCliente(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const r = await listarPerfiles(String(req.params.id));
+    if (!r.exito) return void res.status(400).json({ error: r.error });
+    res.status(200).json({ perfiles: r.perfiles });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function postPerfilCliente(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const r = await guardarPerfil(String(req.params.id), null, req.body ?? {});
+    if (!r.exito) return void res.status(400).json({ error: r.error });
+    res.status(201).json({ perfil: r.perfil, perfiles: r.perfiles });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function putPerfilCliente(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const r = await guardarPerfil(String(req.params.id), String(req.params.perfilId), req.body ?? {});
+    if (!r.exito) return void res.status(400).json({ error: r.error });
+    res.status(200).json({ perfil: r.perfil, perfiles: r.perfiles });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deletePerfilCliente(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const r = await eliminarPerfil(String(req.params.id), String(req.params.perfilId));
+    if (!r.exito) return void res.status(400).json({ error: r.error });
+    res.status(200).json({ perfiles: r.perfiles });
+  } catch (err) {
     next(err);
   }
 }
@@ -272,12 +316,19 @@ export async function confirmarPago(req: Request, res: Response, next: NextFunct
 
 export async function getHistorialFacturas(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const q = String(req.query.q ?? "").trim();
+    const filtro: Record<string, unknown> = {};
+    if (q.length >= 2) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const clientes = await models.masterClientes.find({ $or: [{ nombreOficial: rx }, { codigoCasillero: rx }, { cedulaRuc: rx }] }).select("_id").lean();
+      filtro.$or = [{ numeroFactura: rx }, { "facturadoA.razonSocial": rx }, { "facturadoA.identificacion": rx }, { masterClienteId: { $in: clientes.map((c) => c._id) } }];
+    }
     const facturas = await models.facturas
-      .find()
-      .populate("paquetes")
+      .find(filtro)
+      .populate("paquetes", "wr sh contenido pesoLb")
       .populate("masterClienteId", "nombreOficial codigoCasillero")
       .sort({ createdAt: -1 })
-      .limit(100)
+      .limit(Math.min(Number(req.query.limit) || 50, 200))
       .lean();
     res.status(200).json({ facturas });
   } catch (err: any) {
