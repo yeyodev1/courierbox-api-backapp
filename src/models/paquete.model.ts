@@ -21,6 +21,14 @@ export interface IPaquete extends Document {
   consigneeNombre: string;
   consigneeLimpio: string;
   subagencyId: string;
+  /** Lo que trae el manifiesto de "Ingreso de carga"; vacío en importaciones antiguas. */
+  fechaIngreso: Date | null;
+  origen: string;
+  agencia: string;
+  ciudad: string;
+  direccion: string;
+  valorDeclarado: number;
+  reempaque: boolean | null;
   masterClienteId: mongoose.Types.ObjectId | null;
   estado: EstadoPaquete;
   facturaId: mongoose.Types.ObjectId | null;
@@ -42,6 +50,13 @@ const paqueteSchema = new Schema<IPaquete>(
     consigneeNombre: { type: String, default: "" },
     consigneeLimpio: { type: String, default: "" },
     subagencyId: { type: String, default: "" },
+    fechaIngreso: { type: Date, default: null },
+    origen: { type: String, default: "" },
+    agencia: { type: String, default: "" },
+    ciudad: { type: String, default: "" },
+    direccion: { type: String, default: "" },
+    valorDeclarado: { type: Number, default: 0 },
+    reempaque: { type: Boolean, default: null },
     masterClienteId: { type: Schema.Types.ObjectId, ref: "MasterCliente", default: null },
     estado: {
       type: String,
@@ -54,6 +69,7 @@ const paqueteSchema = new Schema<IPaquete>(
 );
 
 paqueteSchema.index({ wr: 1 });
+paqueteSchema.index({ fechaIngreso: -1 });
 paqueteSchema.index({ sh: 1 });
 paqueteSchema.index({ masterClienteId: 1 });
 paqueteSchema.index({ estado: 1 });

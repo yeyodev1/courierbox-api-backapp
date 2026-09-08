@@ -15,6 +15,7 @@ import {
   toMoney,
 } from "../services/venta_producto.service";
 import { endOfCalendarDate, toCalendarDate, todayAsCalendarDate } from "../utils/calendar-date";
+import { generarCasillero } from "../services/casillero.service";
 
 function getUser(req: Request) {
   return req.user as { userId: string; email: string; role: string } | undefined;
@@ -514,20 +515,6 @@ export async function buscarClientesVenta(req: Request, res: Response, next: Nex
   } catch (error) {
     next(error);
   }
-}
-
-/**
- * Casillero is the unique key of a master client, but the sale form does not
- * always know it. Generate a collision-free placeholder so the operator can
- * register the client on the spot and correct the code later.
- */
-async function generarCasillero(): Promise<string> {
-  for (let i = 0; i < 12; i++) {
-    const code = `CBX${Math.floor(100000 + Math.random() * 900000)}`;
-    const taken = await models.masterClientes.exists({ codigoCasillero: code });
-    if (!taken) return code;
-  }
-  return `CBX${Date.now().toString(36).toUpperCase()}`;
 }
 
 /** Create a master client straight from the sale form when the search finds none. */

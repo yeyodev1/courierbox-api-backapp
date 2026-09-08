@@ -6,6 +6,7 @@ import {
   recalcularNombresLimpios,
 } from "../services/etl.service";
 import { models } from "../models/index";
+import { procesarIngresoCarga } from "../services/ingreso_carga.service";
 
 export async function uploadExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -91,6 +92,32 @@ export async function buscarClientesMaster(req: Request, res: Response, next: Ne
       .lean();
     res.status(200).json({ clientes });
   } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Ingreso de carga: el manifiesto por vuelo, una fila por caja.
+ * Sin `?aplicar=1` sólo previsualiza — misma resolución de clientes, cero
+ * escrituras — para que el operador vea qué se va a crear antes de confirmar.
+ */
+export async function postIngresoCarga(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "Adjunta el archivo de Ingreso de carga (.xlsx)" });
+      return;
+    }
+    const aplicar = ["1", "true", "si"].includes(String(req.query.aplicar ?? "").toLowerCase());
+    const resultado = await procesarIngresoCarga(req.file.buffer, {
+      aplicar,
+      origenNota: req.file.originalname,
+    });
+    res.status(200).json(resultado);
+  } catch (err: any) {
+    if (err?.status === 400) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 }
