@@ -97,14 +97,15 @@ describe("contifico — bloques del documento", () => {
   it("reparte las bases: el flete grava IVA, el arancel no es objeto de IVA", () => {
     const t = armarDetalles([
       { codigoProducto: "CATB01", productoId: "a", cantidad: 10, precio: 6.5, porcentajeIva: 15 },
-      { codigoProducto: "REEMB", productoId: "b", cantidad: 10, precio: 1.99, porcentajeIva: null },
+      { codigoProducto: "REEMB", productoId: "b", cantidad: 10, precio: 1.99, porcentajeIva: 0 },
     ]);
     expect(t.subtotal_12).toBe(65);
     expect(t.subtotal_0).toBe(19.9);
     expect(t.iva).toBe(9.75);
     expect(t.total).toBe(94.65);
     expect(t.detalles[0]).toMatchObject({ producto_id: "a", base_gravable: 65, base_cero: 0, base_no_gravable: 0, porcentaje_iva: 15 });
-    expect(t.detalles[1]).toMatchObject({ producto_id: "b", base_gravable: 0, base_no_gravable: 19.9, porcentaje_iva: null });
+    // Contifico rechazó «falta campo: porcentaje_iva» cuando iba nulo: el arancel va como 0 %.
+    expect(t.detalles[1]).toMatchObject({ producto_id: "b", base_gravable: 0, base_cero: 19.9, base_no_gravable: 0, porcentaje_iva: 0 });
   });
 
   it("la fecha va como DD/MM/YYYY del día en Ecuador", () => {
@@ -135,7 +136,7 @@ describe("contifico — emitirFactura", () => {
     cliente: { identificacion: "0954227641", razonSocial: "Diego Reyes", email: "d@x.com", telefono: "0995254965", direccion: "Guayaquil" },
     lineas: [
       { codigoProducto: "CATB01", cantidad: 10, precio: 6.5, porcentajeIva: 15 },
-      { codigoProducto: "REEMB", cantidad: 10, precio: 1.99, porcentajeIva: null as number | null },
+      { codigoProducto: "REEMB", cantidad: 10, precio: 1.99, porcentajeIva: 0 },
     ],
     descripcion: "10.00 lb · 1 paquete",
   };

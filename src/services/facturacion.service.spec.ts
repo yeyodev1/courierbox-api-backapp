@@ -151,7 +151,7 @@ describe("facturarPaquetes", () => {
     expect(input.cliente).toMatchObject({ identificacion: "0954227641", razonSocial: "Diego Reyes", direccion: "Gye" });
     expect(input.lineas).toEqual([
       { codigoProducto: "CATB01", cantidad: 10, precio: 6.5, porcentajeIva: 15 },
-      { codigoProducto: "REEMB", cantidad: 10, precio: 1.99, porcentajeIva: null },
+      { codigoProducto: "REEMB", cantidad: 10, precio: 1.99, porcentajeIva: 0 },
     ]);
     expect(mocks.facturasCreate).toHaveBeenCalledWith(expect.objectContaining({ contificoId: "ctf1", autorizacionSri: "07092026…", xmlUrl: "https://x/xml/" }));
     expect(mocks.paquetesUpdateMany).toHaveBeenCalledWith({ _id: { $in: [String(paquetes[0]._id)] } }, { $set: expect.objectContaining({ estado: "facturado" }) });
