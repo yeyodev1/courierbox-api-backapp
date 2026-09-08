@@ -6,7 +6,7 @@ import {
   recalcularNombresLimpios,
 } from "../services/etl.service";
 import { models } from "../models/index";
-import { procesarIngresoCarga, type Decisiones } from "../services/ingreso_carga.service";
+import { procesarIngresoCarga, procesarIngresoManual, type Decisiones } from "../services/ingreso_carga.service";
 
 export async function uploadExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -134,6 +134,32 @@ export async function postIngresoCarga(req: Request, res: Response, next: NextFu
       res.status(400).json({ error: err.message });
       return;
     }
+    next(err);
+  }
+}
+
+/**
+ * Ingreso de carga caja por caja, desde la pantalla. Mismo motor y misma
+ * previsualización que el Excel: `?aplicar=1` escribe, sin él sólo muestra.
+ * Body: { filas: [...], decisiones?: {...} }.
+ */
+export async function postIngresoManual(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const filas = req.body?.filas;
+    if (!Array.isArray(filas) || filas.length === 0) {
+      res.status(400).json({ error: "Agrega al menos una caja" });
+      return;
+    }
+    if (filas.length > 200) {
+      res.status(400).json({ error: "Máximo 200 cajas por ingreso manual; para más, usa el Excel" });
+      return;
+    }
+    const aplicar = ["1", "true", "si"].includes(String(req.query.aplicar ?? "").toLowerCase());
+    const decisiones = req.body?.decisiones && typeof req.body.decisiones === "object" && !Array.isArray(req.body.decisiones) ? (req.body.decisiones as Decisiones) : {};
+    const resultado = await procesarIngresoManual(filas, { aplicar, origenNota: "ingreso manual", decisiones });
+    res.status(200).json(resultado);
+  } catch (err: any) {
+    if (err?.status === 400) return void res.status(400).json({ error: err.message });
     next(err);
   }
 }
