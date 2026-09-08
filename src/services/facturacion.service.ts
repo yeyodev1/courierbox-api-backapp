@@ -219,7 +219,13 @@ export async function completarDatosCliente(
     if (!n) return { exito: false, error: "El nombre no puede quedar vacío." };
     set.nombreOficial = n;
   }
-  if (datos.email !== undefined) set.email = String(datos.email).trim();
+  if (datos.email !== undefined) {
+    const email = String(datos.email).trim().toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+      return { exito: false, error: `"${email}" no es un correo válido. Revísalo o déjalo vacío.` };
+    }
+    set.email = email;
+  }
   if (datos.telefono !== undefined) set.telefono = String(datos.telefono).trim();
   if (datos.direccion !== undefined) set.direccion = String(datos.direccion).trim();
 
