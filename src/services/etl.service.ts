@@ -58,7 +58,7 @@ function limpiarTracking(raw: string): string {
   return raw.replace(/^_+|_+$/g, "").trim();
 }
 
-function limpiarNombreConsignee(raw: string): { nombreLimpio: string; notasExtraidas: string } {
+export function limpiarNombreConsignee(raw: string): { nombreLimpio: string; notasExtraidas: string } {
   let texto = raw.trim();
   const notas: string[] = [];
 
