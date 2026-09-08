@@ -21,6 +21,7 @@ import { RetiroCounter } from "./retiro_counter.model";
 import { SolicitudCompra } from "./solicitud_compra.model";
 import { ProductoInventario } from "./producto_inventario.model";
 import { VentaProducto } from "./venta_producto.model";
+import { Configuracion } from "./configuracion.model";
 
 export const models = {
   payments: Payment,
@@ -46,4 +47,5 @@ export const models = {
   solicitudesCompra: SolicitudCompra,
   productosInventario: ProductoInventario,
   ventasProducto: VentaProducto,
+  configuraciones: Configuracion,
 };

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   facturasCreate: vi.fn(),
   emitirFactura: vi.fn(),
   createAndSendNotification: vi.fn(),
+  obtenerIvaPorcentaje: vi.fn(),
 }));
 
 vi.mock("../models/index", () => ({
@@ -21,6 +22,10 @@ vi.mock("../models/index", () => ({
   },
 }));
 vi.mock("./contifico.service", () => ({ contificoService: { emitirFactura: mocks.emitirFactura } }));
+vi.mock("./configuracion_facturacion.service", () => ({
+  IVA_PORCENTAJE_DEFECTO: 15,
+  obtenerIvaPorcentaje: mocks.obtenerIvaPorcentaje,
+}));
 vi.mock("./ghl-webhook.service", () => ({ enviarWebhookFactura: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("./notification.service", () => ({ createAndSendNotification: mocks.createAndSendNotification }));
 vi.mock("../config/env", () => ({
@@ -128,6 +133,7 @@ describe("facturarPaquetes", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.obtenerIvaPorcentaje.mockResolvedValue(15);
     mocks.paquetesFind.mockReturnValue(lean(paquetes));
     mocks.clientesFindById.mockReturnValue(lean(cliente));
     mocks.facturasCreate.mockImplementation(async (doc: any) => ({ _id: new mongoose.Types.ObjectId(), ...doc }));
@@ -197,6 +203,19 @@ describe("facturarPaquetes", () => {
 
     expect(r.exito).toBe(true);
     expect(mocks.emitirFactura.mock.calls[0][0].cliente.identificacion).toBe("9999999999999");
+  });
+
+  /** El IVA global manda en los totales y en la línea que va a Contifico. */
+  it("con el IVA global en 0 % no cobra IVA y así lo manda a Contifico", async () => {
+    mocks.obtenerIvaPorcentaje.mockResolvedValue(0);
+    mocks.emitirFactura.mockResolvedValue({ exito: true, id: "c", numero: "001-001-000000891", estadoSri: "autorizado", autorizacion: "", urlRide: "", urlXml: "", mensaje: "", raw: {} });
+
+    const r = await facturarPaquetes([String(paquetes[0]._id)]);
+
+    expect(r.exito).toBe(true);
+    if (!r.exito) return;
+    expect(r.factura.totalGeneral).toBe(84.9);
+    expect(mocks.emitirFactura.mock.calls[0][0].lineas[0]).toMatchObject({ codigoProducto: "CATB01", porcentajeIva: 0 });
   });
 
   it("no factura dos veces un paquete que ya tiene factura", async () => {
