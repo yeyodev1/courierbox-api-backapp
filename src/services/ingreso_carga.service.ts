@@ -440,6 +440,94 @@ export async function procesarIngresoCarga(
   opciones: { aplicar: boolean; origenNota?: string; decisiones?: Decisiones }
 ): Promise<ResultadoIngreso> {
   const { filas, errores } = leerIngresoCarga(buffer);
+  return procesarFilasIngreso(filas, errores, opciones);
+}
+
+/** Una caja escrita a mano desde la pantalla, con las mismas columnas del manifiesto. */
+export interface FilaManual {
+  fecha?: string;
+  mg?: string;
+  wr: string;
+  origen?: string;
+  cliente?: string;
+  agencia?: string;
+  ciudad?: string;
+  direccion?: string;
+  tracking?: string;
+  contenido?: string;
+  valor?: number | string;
+  peso?: number | string;
+  reempaque?: boolean | string | null;
+}
+
+/**
+ * Convierte filas escritas a mano al mismo formato que las del Excel y las
+ * valida como lo haría la hoja: BOX ID obligatorio con forma WR…, Master con
+ * forma MG… si viene, peso numérico.
+ */
+export function filasDesdeManual(entrada: unknown): { filas: FilaIngreso[]; errores: string[] } {
+  const lista: FilaManual[] = Array.isArray(entrada) ? entrada : [];
+  const filas: FilaIngreso[] = [];
+  const errores: string[] = [];
+  const texto = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
+  lista.forEach((r, i) => {
+    const numero = i + 1;
+    const { wr, nota } = parsearWr(r?.wr);
+    if (!wr) {
+      errores.push(`Caja ${numero}: el BOX ID debe tener la forma WR seguido de números (ej. WR839943).`);
+      return;
+    }
+    const mg = texto(r?.mg).toUpperCase();
+    if (mg && !/^MG\d+$/.test(mg)) {
+      errores.push(`Caja ${numero} (${wr}): el Master debe tener la forma MG seguido de números (ej. MG002516).`);
+      return;
+    }
+    const pesoLb = parsearPeso(r?.peso);
+    if (!(pesoLb > 0)) {
+      errores.push(`Caja ${numero} (${wr}): el peso debe ser mayor que 0.`);
+      return;
+    }
+    const fechaIngreso = r?.fecha ? parsearFecha(/^\d{4}-\d{2}-\d{2}$/.test(String(r.fecha)) ? new Date(`${r.fecha}T12:00:00Z`) : r.fecha) : null;
+    if (r?.fecha && !fechaIngreso) {
+      errores.push(`Caja ${numero} (${wr}): la fecha no es válida.`);
+      return;
+    }
+    filas.push({
+      fila: numero,
+      fechaIngreso,
+      mg,
+      wr,
+      notaWr: nota,
+      origen: texto(r?.origen),
+      clienteRaw: texto(r?.cliente),
+      agencia: texto(r?.agencia),
+      ciudad: texto(r?.ciudad),
+      direccion: texto(r?.direccion),
+      provincia: "",
+      pais: "",
+      tracking: limpiarTracking(r?.tracking),
+      contenido: texto(r?.contenido),
+      valorDeclarado: parsearPeso(r?.valor),
+      pesoLb,
+      reempaque: typeof r?.reempaque === "boolean" ? r.reempaque : r?.reempaque == null || r.reempaque === "" ? null : /^(si|sí|s|yes|true|1)$/i.test(String(r.reempaque)),
+    });
+  });
+  return { filas, errores };
+}
+
+export async function procesarIngresoManual(
+  entrada: unknown,
+  opciones: { aplicar: boolean; origenNota?: string; decisiones?: Decisiones }
+): Promise<ResultadoIngreso> {
+  const { filas, errores } = filasDesdeManual(entrada);
+  return procesarFilasIngreso(filas, errores, opciones);
+}
+
+async function procesarFilasIngreso(
+  filas: FilaIngreso[],
+  errores: string[],
+  opciones: { aplicar: boolean; origenNota?: string; decisiones?: Decisiones }
+): Promise<ResultadoIngreso> {
   const resolutor = await cargarResolutor();
   const decisiones = opciones.decisiones ?? {};
 
