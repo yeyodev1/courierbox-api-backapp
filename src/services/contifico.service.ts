@@ -38,8 +38,12 @@ export interface LineaFactura {
   codigoProducto: string;
   cantidad: number;
   precio: number;
-  /** 15 grava IVA, 0 tarifa cero, null no objeto de IVA. */
-  porcentajeIva: number | null;
+  /**
+   * 15 grava IVA, 0 tarifa cero. Contifico exige el campo numérico en cada
+   * línea: mandarlo nulo ("no objeto de IVA") devuelve «falta campo:
+   * porcentaje_iva», así que lo que no grava va como 0 %.
+   */
+  porcentajeIva: number;
 }
 
 export interface EmisionInput {
@@ -151,20 +155,21 @@ export function armarDetalles(lineas: Array<LineaFactura & { productoId: string 
   let iva = 0;
   const detalles = lineas.map((l) => {
     const base = money(l.cantidad * l.precio);
-    const gravado = l.porcentajeIva && l.porcentajeIva > 0;
+    const porcentaje = Number(l.porcentajeIva) || 0;
+    const gravado = porcentaje > 0;
     if (gravado) {
       subtotalGravado += base;
-      iva += money(base * (l.porcentajeIva! / 100));
+      iva += money(base * (porcentaje / 100));
     } else subtotalCero += base;
     return {
       producto_id: l.productoId,
       cantidad: Number(l.cantidad.toFixed(2)),
       precio: Number(l.precio.toFixed(2)),
-      porcentaje_iva: l.porcentajeIva,
+      porcentaje_iva: porcentaje,
       porcentaje_descuento: 0,
-      base_cero: l.porcentajeIva === 0 ? base : 0,
+      base_cero: gravado ? 0 : base,
       base_gravable: gravado ? base : 0,
-      base_no_gravable: l.porcentajeIva === null ? base : 0,
+      base_no_gravable: 0,
     };
   });
   subtotalGravado = money(subtotalGravado);

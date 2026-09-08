@@ -379,7 +379,7 @@ export async function facturarPaquetes(
     },
     lineas: [
       { codigoProducto: env.CONTIFICO_PRODUCTO_FLETE, cantidad: pesoTotal, precio: TARIFA_FLETE_LB, porcentajeIva: 15 },
-      { codigoProducto: env.CONTIFICO_PRODUCTO_ARANCEL, cantidad: pesoTotal, precio: TARIFA_ARANCEL_LB, porcentajeIva: null },
+      { codigoProducto: env.CONTIFICO_PRODUCTO_ARANCEL, cantidad: pesoTotal, precio: TARIFA_ARANCEL_LB, porcentajeIva: 0 },
     ],
     descripcion,
   });
