@@ -111,6 +111,18 @@ export function fechaContifico(d: Date = new Date()): string {
 
 const soloDigitos = (s: string) => String(s ?? "").replace(/\D+/g, "");
 
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * Un correo sólo viaja si tiene forma de correo. Contifico valida el formato
+ * incluso de un campo vacío: mandar `email: ""` devolvía «Formato de email
+ * incorrecto» y tumbaba la factura de cualquier cliente sin correo.
+ */
+export function emailParaContifico(raw: unknown): string | undefined {
+  const email = String(raw ?? "").trim().toLowerCase().slice(0, 50);
+  return EMAIL_RX.test(email) ? email : undefined;
+}
+
 /**
  * El bloque `cliente` del documento. Contifico crea o reutiliza la persona por
  * identificación. Una natural con RUC lleva cédula y RUC con tipo N; una
@@ -134,16 +146,23 @@ export function clienteContifico(c: ClienteFactura) {
   const tercer = Number(id[2]);
   const esRuc = id.length === 13;
   const tipo = esRuc && (tercer === 6 || tercer === 9) ? "J" : "N";
-  return {
+
+  // Lo opcional sólo va si tiene valor: Contifico valida el formato de lo que
+  // recibe, aunque sea una cadena vacía.
+  const cliente: Record<string, unknown> = {
     cedula: id.slice(0, 10),
-    ruc: esRuc ? id : "",
     razon_social: c.razonSocial.trim().slice(0, 300),
     tipo,
-    telefonos: soloDigitos(c.telefono ?? "").slice(0, 300),
-    direccion: (c.direccion ?? "").trim().slice(0, 300),
-    email: (c.email ?? "").trim().slice(0, 50),
     es_extranjero: false,
   };
+  if (esRuc) cliente.ruc = id;
+  const telefonos = soloDigitos(c.telefono ?? "").slice(0, 300);
+  if (telefonos) cliente.telefonos = telefonos;
+  const direccion = (c.direccion ?? "").trim().slice(0, 300);
+  if (direccion) cliente.direccion = direccion;
+  const email = emailParaContifico(c.email);
+  if (email) cliente.email = email;
+  return cliente;
 }
 
 const money = (n: number) => Number(n.toFixed(2));

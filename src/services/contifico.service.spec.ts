@@ -21,6 +21,7 @@ vi.mock("../config/env", () => ({
 import {
   armarDetalles,
   clienteContifico,
+  emailParaContifico,
   diagnostico,
   emitirFactura,
   fechaContifico,
@@ -79,13 +80,29 @@ describe("contifico — bloques del documento", () => {
   });
 
   it("una cédula va como persona natural; un RUC de sociedad como jurídica", () => {
-    expect(clienteContifico({ identificacion: "0954227641", razonSocial: "Diego Reyes" })).toMatchObject({
-      cedula: "0954227641", ruc: "", tipo: "N", razon_social: "Diego Reyes",
-    });
+    const natural = clienteContifico({ identificacion: "0954227641", razonSocial: "Diego Reyes" });
+    expect(natural).toMatchObject({ cedula: "0954227641", tipo: "N", razon_social: "Diego Reyes" });
+    expect(natural).not.toHaveProperty("ruc");
     expect(clienteContifico({ identificacion: "0993388549001", razonSocial: "Courier Box S.A.S." })).toMatchObject({
       cedula: "0993388549", ruc: "0993388549001", tipo: "J",
     });
     expect(clienteContifico({ identificacion: "0954227641001", razonSocial: "Diego" })).toMatchObject({ tipo: "N", ruc: "0954227641001" });
+  });
+
+  /** «Formato de email incorrecto»: un cliente sin correo tumbaba la factura porque iba `email: ""`. */
+  it("no manda correo, teléfono ni dirección vacíos, y limpia el correo que sí va", () => {
+    const sin = clienteContifico({ identificacion: "0954227641", razonSocial: "Diego", email: "", telefono: "", direccion: "  " });
+    expect(sin).not.toHaveProperty("email");
+    expect(sin).not.toHaveProperty("telefonos");
+    expect(sin).not.toHaveProperty("direccion");
+
+    const con = clienteContifico({ identificacion: "0954227641", razonSocial: "Diego", email: "  Diego@Correo.COM ", telefono: "099-525 4965", direccion: "Gye" });
+    expect(con).toMatchObject({ email: "diego@correo.com", telefonos: "0995254965", direccion: "Gye" });
+
+    const malo = clienteContifico({ identificacion: "0954227641", razonSocial: "Diego", email: "sin arroba" });
+    expect(malo).not.toHaveProperty("email");
+    expect(emailParaContifico("a@b")).toBeUndefined();
+    expect(emailParaContifico("a@b.co")).toBe("a@b.co");
   });
 
   it("consumidor final usa la persona 9999999999 que ya existe en la cuenta", () => {
