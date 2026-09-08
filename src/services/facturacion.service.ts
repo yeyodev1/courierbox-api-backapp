@@ -6,10 +6,12 @@ import { createAndSendNotification } from "./notification.service";
 import { logger } from "../utils/logger";
 import { env } from "../config/env";
 import type { EstadoSri, IFactura } from "../models/factura.model";
+import { IVA_PORCENTAJE_DEFECTO, obtenerIvaPorcentaje } from "./configuracion_facturacion.service";
 
 const TARIFA_FLETE_LB = 6.50;
 const TARIFA_ARANCEL_LB = 1.99;
-const IVA = 0.15;
+/** Sólo como respaldo; el vigente sale de la configuración global. */
+const IVA = IVA_PORCENTAJE_DEFECTO / 100;
 
 /** Hasta este total el SRI admite facturar a consumidor final sin identificación. */
 export const TOPE_CONSUMIDOR_FINAL = 50;
@@ -22,6 +24,21 @@ export const TARIFAS = {
   iva: IVA,
 } as const;
 
+export interface Tarifas {
+  fleteLb: number;
+  arancelLb: number;
+  /** Fracción (0.15) para las cuentas. */
+  iva: number;
+  /** Porcentaje (15) para mostrarlo y para la línea de Contifico. */
+  ivaPorcentaje: number;
+}
+
+/** Las tarifas vigentes: flete y arancel fijos, IVA según la configuración global. */
+export async function obtenerTarifas(): Promise<Tarifas> {
+  const ivaPorcentaje = await obtenerIvaPorcentaje();
+  return { fleteLb: TARIFA_FLETE_LB, arancelLb: TARIFA_ARANCEL_LB, iva: ivaPorcentaje / 100, ivaPorcentaje };
+}
+
 export interface TotalesFactura {
   pesoTotalLb: number;
   totalFlete: number;
@@ -32,13 +49,13 @@ export interface TotalesFactura {
 }
 
 /** Single source of truth for the tariff maths, shared by preview and emission. */
-export function calcularTotales(pesos: number[]): TotalesFactura {
+export function calcularTotales(pesos: number[], iva: number = IVA): TotalesFactura {
   const pesoTotalLb = pesos.reduce((sum, p) => sum + (Number(p) || 0), 0);
   const totalFlete = parseFloat((pesoTotalLb * TARIFA_FLETE_LB).toFixed(2));
   const totalArancel = parseFloat((pesoTotalLb * TARIFA_ARANCEL_LB).toFixed(2));
   const subtotal = parseFloat((totalFlete + totalArancel).toFixed(2));
   // Only the freight line carries IVA, matching the Contifico item breakdown.
-  const totalIva = parseFloat((totalFlete * IVA).toFixed(2));
+  const totalIva = parseFloat((totalFlete * iva).toFixed(2));
   const totalGeneral = parseFloat((subtotal + totalIva).toFixed(2));
   return { pesoTotalLb, totalFlete, totalArancel, subtotal, totalIva, totalGeneral };
 }
@@ -221,6 +238,7 @@ export async function completarDatosCliente(
  */
 export async function listarFacturables(q: string) {
   const term = (q ?? "").trim();
+  const tarifas = await obtenerTarifas();
 
   // Sin búsqueda, el counter ve lo último que entró y sigue sin factura: para
   // elegir una caja no hace falta saber de antemano qué escribir.
@@ -231,7 +249,7 @@ export async function listarFacturables(q: string) {
       .sort({ createdAt: -1 })
       .limit(60)
       .lean();
-    return { paquetes, tarifas: TARIFAS };
+    return { paquetes, tarifas };
   }
 
   const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -263,7 +281,7 @@ export async function listarFacturables(q: string) {
     .limit(60)
     .lean();
 
-  return { paquetes, tarifas: TARIFAS };
+  return { paquetes, tarifas };
 }
 
 async function cargarSeleccion(paqueteIds: string[]) {
@@ -279,7 +297,8 @@ async function cargarSeleccion(paqueteIds: string[]) {
   const cliente = masterId ? await models.masterClientes.findById(masterId).lean() : null;
   if (!cliente) return { error: "Cliente no encontrado" as const };
 
-  return { paquetes, cliente, totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0)) };
+  const tarifas = await obtenerTarifas();
+  return { paquetes, cliente, tarifas, totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0), tarifas.iva) };
 }
 
 /** Lo que el counter necesita ver antes de emitir: cliente, totales y qué falta. */
@@ -293,6 +312,7 @@ export async function validarSeleccion(paqueteIds: string[]) {
     exito: true as const,
     cliente,
     totales: sel.totales,
+    tarifas: sel.tarifas,
     ...validacion,
     listo: validacion.listo && yaFacturado.length === 0,
     yaFacturados: yaFacturado.map((p) => p.wr || p.sh || String(p._id)),
@@ -339,7 +359,7 @@ export async function facturarPaquetes(
 > {
   const sel = await cargarSeleccion(paqueteIds);
   if ("error" in sel) return { exito: false, error: String(sel.error) };
-  const { paquetes, cliente, totales } = sel;
+  const { paquetes, cliente, totales, tarifas } = sel;
 
   if (paquetes.some((p) => p.facturaId)) {
     return { exito: false, error: "Alguno de esos paquetes ya tiene factura. Actualiza la búsqueda." };
@@ -378,7 +398,7 @@ export async function facturarPaquetes(
       direccion: datos.direccion,
     },
     lineas: [
-      { codigoProducto: env.CONTIFICO_PRODUCTO_FLETE, cantidad: pesoTotal, precio: TARIFA_FLETE_LB, porcentajeIva: 15 },
+      { codigoProducto: env.CONTIFICO_PRODUCTO_FLETE, cantidad: pesoTotal, precio: TARIFA_FLETE_LB, porcentajeIva: tarifas.ivaPorcentaje },
       { codigoProducto: env.CONTIFICO_PRODUCTO_ARANCEL, cantidad: pesoTotal, precio: TARIFA_ARANCEL_LB, porcentajeIva: 0 },
     ],
     descripcion,
