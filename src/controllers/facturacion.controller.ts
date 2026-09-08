@@ -1,9 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { models } from "../models/index";
+import { guardarIvaPorcentaje, obtenerIvaPorcentaje, IVA_PORCENTAJES_PERMITIDOS } from "../services/configuracion_facturacion.service";
 import {
   calcularTotales,
   completarDatosCliente,
+  obtenerTarifas,
   facturarPaquetes,
   listarFacturables,
   registrarCobroContifico,
@@ -68,6 +70,30 @@ export async function completarCliente(req: Request, res: Response, next: NextFu
   }
 }
 
+/** El IVA vigente para el flete y las opciones que se pueden elegir. */
+export async function getConfiguracionFacturacion(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json({ ivaPorcentaje: await obtenerIvaPorcentaje(), ivaOpciones: IVA_PORCENTAJES_PERMITIDOS, tarifas: await obtenerTarifas() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Cambia el IVA global. Aplica a los totales de todos y a la próxima factura. */
+export async function putConfiguracionFacturacion(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = req.user as { email?: string } | undefined;
+    const ivaPorcentaje = await guardarIvaPorcentaje(req.body?.ivaPorcentaje, user?.email ?? "");
+    res.status(200).json({ ivaPorcentaje, tarifas: await obtenerTarifas() });
+  } catch (err: any) {
+    if (err?.status === 400) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+}
+
 /** Vuelve a consultar (y reenvía si hace falta) el estado de la factura en el SRI. */
 export async function sincronizarSri(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -101,7 +127,8 @@ export async function previewFactura(req: Request, res: Response, next: NextFunc
       return;
     }
     const paquetes = await models.paquetes.find({ _id: { $in: paqueteIds } }).select("pesoLb").lean();
-    res.status(200).json({ totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0)) });
+    const tarifas = await obtenerTarifas();
+    res.status(200).json({ totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0), tarifas.iva), tarifas });
   } catch (err) {
     next(err);
   }
