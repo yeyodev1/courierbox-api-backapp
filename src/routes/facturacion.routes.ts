@@ -15,6 +15,7 @@ import {
   diagnosticoContifico,
   getConfiguracionFacturacion,
   putConfiguracionFacturacion,
+  getFacturaDetalle,
   getPerfilesCliente,
   postPerfilCliente,
   putPerfilCliente,
@@ -41,6 +42,7 @@ facturacionRouter.post("/cliente/:id/perfiles", requireAuth, counterAccess, post
 facturacionRouter.put("/cliente/:id/perfiles/:perfilId", requireAuth, counterAccess, putPerfilCliente);
 facturacionRouter.delete("/cliente/:id/perfiles/:perfilId", requireAuth, counterAccess, deletePerfilCliente);
 facturacionRouter.post("/:facturaId/sri", requireAuth, counterAccess, sincronizarSri);
+facturacionRouter.get("/detalle/:facturaId", requireAuth, counterAccess, getFacturaDetalle);
 facturacionRouter.post("/generar", requireAuth, counterAccess, generarFactura);
 facturacionRouter.get("/pendientes/:casillero", getFacturasPendientes);
 facturacionRouter.post("/pagar", upload.single("comprobante"), registrarPago);

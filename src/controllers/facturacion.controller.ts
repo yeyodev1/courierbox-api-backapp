@@ -138,6 +138,23 @@ export async function deletePerfilCliente(req: Request, res: Response, next: Nex
   }
 }
 
+/** Una factura con todo: cliente, cajas completas, desglose, SRI, pagos. */
+export async function getFacturaDetalle(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = String(req.params.facturaId);
+    if (!mongoose.isValidObjectId(id)) return void res.status(400).json({ error: "Factura inválida" });
+    const factura = await models.facturas
+      .findById(id)
+      .populate("paquetes")
+      .populate("masterClienteId", "nombreOficial codigoCasillero cedulaRuc email telefono direccion")
+      .lean();
+    if (!factura) return void res.status(404).json({ error: "Factura no encontrada" });
+    res.status(200).json({ factura });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** Vuelve a consultar (y reenvía si hace falta) el estado de la factura en el SRI. */
 export async function sincronizarSri(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
