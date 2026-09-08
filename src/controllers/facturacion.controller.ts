@@ -11,6 +11,7 @@ import {
   validarSeleccion,
 } from "../services/facturacion.service";
 import { uploadComprobante } from "../services/upload.service";
+import { contificoService } from "../services/contifico.service";
 
 export async function generarFactura(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -253,6 +254,16 @@ export async function getHistorialFacturas(req: Request, res: Response, next: Ne
       .lean();
     res.status(200).json({ facturas });
   } catch (err: any) {
+    next(err);
+  }
+}
+
+/** Salud de la integración con Contifico, sin emitir nada. Para verificar un despliegue. */
+export async function diagnosticoContifico(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const d = await contificoService.diagnostico();
+    res.status(d.error ? 503 : 200).json(d);
+  } catch (err) {
     next(err);
   }
 }

@@ -21,6 +21,7 @@ vi.mock("../config/env", () => ({
 import {
   armarDetalles,
   clienteContifico,
+  diagnostico,
   emitirFactura,
   fechaContifico,
   limpiarCacheProductos,
@@ -224,5 +225,42 @@ describe("contifico — emitirFactura", () => {
       { forma_cobro: "TRA", monto: "94.65", fecha: "07/09/2026", numero_comprobante: "TRANSF 123" },
       expect.anything()
     );
+  });
+});
+
+describe("contifico — diagnóstico", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarCacheProductos();
+  });
+
+  it("reporta credenciales, siguiente número y los productos resueltos sin crear nada", async () => {
+    mocks.get.mockImplementation(respuestaGet);
+
+    const d = await diagnostico();
+
+    expect(d).toMatchObject({
+      configurado: true,
+      puntoEmision: "001-001",
+      siguienteNumero: "001-001-000000889",
+      productos: [
+        { rol: "flete", codigo: "CATB01", id: "ZxgepMDg5iYgDa1p" },
+        { rol: "arancel", codigo: "REEMB", id: "MEegJ9l7BTMvkdQ5" },
+      ],
+    });
+    expect(d.error).toBeUndefined();
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("si un producto no existe, lo dice sin tumbar el resto del diagnóstico", async () => {
+    mocks.get.mockImplementation(async (url: string, config?: any) =>
+      url === "/producto/" && config?.params?.codigo === "REEMB" ? { data: [] } : respuestaGet(url, config)
+    );
+
+    const d = await diagnostico();
+
+    expect(d.productos[0].id).toBe("ZxgepMDg5iYgDa1p");
+    expect(d.productos[1]).toMatchObject({ id: null, error: expect.stringContaining('"REEMB" no existe') });
   });
 });

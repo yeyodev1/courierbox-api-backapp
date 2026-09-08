@@ -12,6 +12,7 @@ import {
   validarFactura,
   completarCliente,
   sincronizarSri,
+  diagnosticoContifico,
 } from "../controllers/facturacion.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -25,6 +26,7 @@ const counterAccess = requireRole(["admin", "gerencia", "superadmin", "bodega"])
 facturacionRouter.get("/facturables", requireAuth, counterAccess, getFacturables);
 facturacionRouter.post("/preview", requireAuth, counterAccess, previewFactura);
 facturacionRouter.post("/validar", requireAuth, counterAccess, validarFactura);
+facturacionRouter.get("/contifico/diagnostico", requireAuth, financeOnly, diagnosticoContifico);
 facturacionRouter.patch("/cliente/:id", requireAuth, counterAccess, completarCliente);
 facturacionRouter.post("/:facturaId/sri", requireAuth, counterAccess, sincronizarSri);
 facturacionRouter.post("/generar", requireAuth, counterAccess, generarFactura);

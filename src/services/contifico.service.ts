@@ -373,7 +373,44 @@ export async function registrarCobro(
   }
 }
 
+/**
+ * Lo que un admin necesita saber antes de la primera factura real: si hay
+ * credenciales, qué número saldría, y si los productos del catálogo existen.
+ * Sólo lecturas contra Contifico; no crea nada.
+ */
+export async function diagnostico(): Promise<{
+  configurado: boolean;
+  apiUrl: string;
+  puntoEmision: string;
+  siguienteNumero: string | null;
+  productos: Array<{ rol: "flete" | "arancel"; codigo: string; id: string | null; error?: string }>;
+  error?: string;
+}> {
+  const base = {
+    configurado: estaConfigurado(),
+    apiUrl: env.CONTIFICO_API_URL,
+    puntoEmision: prefijo().slice(0, -1),
+    siguienteNumero: null as string | null,
+    productos: [] as Array<{ rol: "flete" | "arancel"; codigo: string; id: string | null; error?: string }>,
+  };
+  if (!base.configurado) return { ...base, error: "Faltan CONTIFICO_API_KEY o CONTIFICO_TOKEN" };
+  try {
+    base.siguienteNumero = await siguienteNumero();
+  } catch (err) {
+    return { ...base, error: `No se pudo consultar Contifico: ${describirError(err)}` };
+  }
+  for (const [rol, codigo] of [["flete", env.CONTIFICO_PRODUCTO_FLETE], ["arancel", env.CONTIFICO_PRODUCTO_ARANCEL]] as const) {
+    try {
+      base.productos.push({ rol, codigo, id: await resolverProductoId(codigo) });
+    } catch (err) {
+      base.productos.push({ rol, codigo, id: null, error: String((err as Error).message) });
+    }
+  }
+  return base;
+}
+
 export const contificoService = {
+  diagnostico,
   estaConfigurado,
   emitirFactura,
   enviarSri,
