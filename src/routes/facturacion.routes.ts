@@ -15,6 +15,10 @@ import {
   diagnosticoContifico,
   getConfiguracionFacturacion,
   putConfiguracionFacturacion,
+  getPerfilesCliente,
+  postPerfilCliente,
+  putPerfilCliente,
+  deletePerfilCliente,
 } from "../controllers/facturacion.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -32,9 +36,14 @@ facturacionRouter.get("/configuracion", requireAuth, counterAccess, getConfigura
 facturacionRouter.put("/configuracion", requireAuth, financeOnly, putConfiguracionFacturacion);
 facturacionRouter.get("/contifico/diagnostico", requireAuth, financeOnly, diagnosticoContifico);
 facturacionRouter.patch("/cliente/:id", requireAuth, counterAccess, completarCliente);
+facturacionRouter.get("/cliente/:id/perfiles", requireAuth, counterAccess, getPerfilesCliente);
+facturacionRouter.post("/cliente/:id/perfiles", requireAuth, counterAccess, postPerfilCliente);
+facturacionRouter.put("/cliente/:id/perfiles/:perfilId", requireAuth, counterAccess, putPerfilCliente);
+facturacionRouter.delete("/cliente/:id/perfiles/:perfilId", requireAuth, counterAccess, deletePerfilCliente);
 facturacionRouter.post("/:facturaId/sri", requireAuth, counterAccess, sincronizarSri);
 facturacionRouter.post("/generar", requireAuth, counterAccess, generarFactura);
 facturacionRouter.get("/pendientes/:casillero", getFacturasPendientes);
 facturacionRouter.post("/pagar", upload.single("comprobante"), registrarPago);
 facturacionRouter.post("/confirmar/:facturaId", requireAuth, financeOnly, confirmarPago);
-facturacionRouter.get("/historial", requireAuth, financeOnly, getHistorialFacturas);
+// El counter también necesita ver qué se facturó (número, estado SRI, PDF).
+facturacionRouter.get("/historial", requireAuth, counterAccess, getHistorialFacturas);

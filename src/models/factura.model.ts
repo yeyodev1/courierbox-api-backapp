@@ -28,6 +28,8 @@ export interface IFactura extends Document {
   autorizadaEn: Date | null;
   sriRevisadoEn: Date | null;
   masterClienteId: mongoose.Types.ObjectId;
+  /** Los datos con los que salió la factura (pueden ser un perfil alterno del cliente). */
+  facturadoA: { perfilId: string; identificacion: string; razonSocial: string; email: string };
   paquetes: mongoose.Types.ObjectId[];
   pesoTotalLb: number;
   totalFlete: number;
@@ -59,6 +61,12 @@ const facturaSchema = new Schema<IFactura>(
     autorizadaEn: { type: Date, default: null },
     sriRevisadoEn: { type: Date, default: null },
     masterClienteId: { type: Schema.Types.ObjectId, ref: "MasterCliente", required: true },
+    facturadoA: {
+      perfilId: { type: String, default: "principal" },
+      identificacion: { type: String, default: "" },
+      razonSocial: { type: String, default: "" },
+      email: { type: String, default: "" },
+    },
     paquetes: [{ type: Schema.Types.ObjectId, ref: "Paquete" }],
     pesoTotalLb: { type: Number, default: 0 },
     totalFlete: { type: Number, default: 0 },
