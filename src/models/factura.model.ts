@@ -6,8 +6,27 @@ export type EstadoFactura =
   | "pagada"
   | "cancelada";
 
+export type EstadoSri =
+  | "sin_enviar"
+  | "firmado"
+  | "enviado"
+  | "autorizado"
+  | "rechazado"
+  | "error"
+  | "simulado";
+
 export interface IFactura extends Document {
   numeroFactura: string;
+  /** Id del documento en Contifico; vacío si la emisión falló. */
+  contificoId: string;
+  /** Clave de acceso / número de autorización del SRI (49 dígitos) cuando ya está autorizada. */
+  autorizacionSri: string;
+  estadoSri: EstadoSri;
+  /** Último mensaje del SRI o de Contifico, para que el counter sepa qué corregir. */
+  mensajeSri: string;
+  xmlUrl: string;
+  autorizadaEn: Date | null;
+  sriRevisadoEn: Date | null;
   masterClienteId: mongoose.Types.ObjectId;
   paquetes: mongoose.Types.ObjectId[];
   pesoTotalLb: number;
@@ -28,6 +47,17 @@ export interface IFactura extends Document {
 const facturaSchema = new Schema<IFactura>(
   {
     numeroFactura: { type: String, default: "" },
+    contificoId: { type: String, default: "" },
+    autorizacionSri: { type: String, default: "" },
+    estadoSri: {
+      type: String,
+      enum: ["sin_enviar", "firmado", "enviado", "autorizado", "rechazado", "error", "simulado"],
+      default: "sin_enviar",
+    },
+    mensajeSri: { type: String, default: "" },
+    xmlUrl: { type: String, default: "" },
+    autorizadaEn: { type: Date, default: null },
+    sriRevisadoEn: { type: Date, default: null },
     masterClienteId: { type: Schema.Types.ObjectId, ref: "MasterCliente", required: true },
     paquetes: [{ type: Schema.Types.ObjectId, ref: "Paquete" }],
     pesoTotalLb: { type: Number, default: 0 },
@@ -52,5 +82,7 @@ const facturaSchema = new Schema<IFactura>(
 facturaSchema.index({ masterClienteId: 1 });
 facturaSchema.index({ estado: 1 });
 facturaSchema.index({ numeroFactura: 1 });
+facturaSchema.index({ contificoId: 1 });
+facturaSchema.index({ estadoSri: 1 });
 
 export const Factura = mongoose.model<IFactura>("Factura", facturaSchema);
