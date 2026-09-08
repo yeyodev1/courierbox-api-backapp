@@ -224,12 +224,28 @@ export async function listarFacturables(q: string) {
   if (term.length < 2) return { paquetes: [], tarifas: TARIFAS };
 
   const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  // También por casillero o nombre oficial del cliente: es como el counter
+  // llega desde Ingreso de carga ("Facturar" trae el casillero), y como busca
+  // cuando el manifiesto escribió el nombre distinto al registrado.
+  const clientes = await models.masterClientes
+    .find({ $or: [{ codigoCasillero: rx }, { nombreOficial: rx }] })
+    .select("_id")
+    .limit(50)
+    .lean();
+  const clienteIds = clientes.map((c) => c._id);
   const paquetes = await models.paquetes
     .find({
       estado: { $in: ["importado", "validado", "pendiente_validacion"] },
       facturaId: null,
       masterClienteId: { $ne: null },
-      $or: [{ wr: rx }, { sh: rx }, { trackingOriginal: rx }, { consigneeNombre: rx }, { consigneeLimpio: rx }],
+      $or: [
+        { wr: rx },
+        { sh: rx },
+        { trackingOriginal: rx },
+        { consigneeNombre: rx },
+        { consigneeLimpio: rx },
+        ...(clienteIds.length ? [{ masterClienteId: { $in: clienteIds } }] : []),
+      ],
     })
     .populate("masterClienteId", "nombreOficial cedulaRuc email telefono direccion codigoCasillero")
     .sort({ createdAt: -1 })
