@@ -112,6 +112,13 @@ describe("completarDatosCliente", () => {
     expect(r).toMatchObject({ exito: false, error: expect.stringContaining("ya pertenece a Otro") });
   });
 
+  it("rechaza un correo mal escrito antes de guardarlo", async () => {
+    mocks.clientesFindOne.mockReturnValue(lean(null));
+    const r = await completarDatosCliente(new mongoose.Types.ObjectId().toString(), { email: "diego@correo" });
+    expect(r).toMatchObject({ exito: false, error: expect.stringContaining("no es un correo válido") });
+    expect(mocks.clientesFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
   it("guarda sólo lo enviado, limpio", async () => {
     mocks.clientesFindOne.mockReturnValue(lean(null));
     const id = new mongoose.Types.ObjectId().toString();
