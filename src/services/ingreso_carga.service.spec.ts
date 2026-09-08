@@ -281,3 +281,65 @@ describe("procesarIngresoCarga — aplicar", () => {
     expect(mocks.paquetesCreate).toHaveBeenCalledWith(expect.objectContaining({ wr: "WR100", masterClienteId: null, estado: "pendiente_validacion" }));
   });
 });
+
+describe("procesarIngresoCarga — vincular a mano", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sinPaquetesPrevios();
+    mocks.clientesExists.mockResolvedValue(null);
+    mocks.aliasesFindOne.mockResolvedValue(null);
+    mocks.clientesCreate.mockImplementation(async (doc: any) => ({ _id: new mongoose.Types.ObjectId(), ...doc }));
+    mocks.paquetesCreate.mockResolvedValue({});
+  });
+
+  it("ofrece parecidos por debajo del umbral para que el operador elija", async () => {
+    // "MARIA ELIZABETH GILER" vs "MARIA ELIZABETH GILER TORRES": parecido, pero no como para decidir solo.
+    conClientes([{ _id: "d".repeat(24), nombreOficial: "MARIA ELIZABETH GILER TORRES", codigoCasillero: "CBX444444" }]);
+
+    const r = await procesarIngresoCarga(ARCHIVO, { aplicar: false });
+    const fila = r.filas.find((f) => f.wr === "WR839943")!;
+
+    expect(fila.accion).toBe("creado");
+    expect(fila.sugerencias?.[0]).toMatchObject({ masterId: "d".repeat(24), nombreOficial: "MARIA ELIZABETH GILER TORRES", casillero: "CBX444444" });
+    expect(fila.sugerencias?.[0].score).toBeGreaterThanOrEqual(0.55);
+    expect(fila.sugerencias?.[0].score).toBeLessThan(0.85);
+  });
+
+  it("una decisión de vincular manda sobre el emparejamiento y cuelga la caja a ese cliente", async () => {
+    const id = "d".repeat(24);
+    conClientes([{ _id: id, nombreOficial: "MARIA ELIZABETH GILER TORRES", codigoCasillero: "CBX444444" }]);
+
+    const r = await procesarIngresoCarga(ARCHIVO, { aplicar: true, decisiones: { WR839943: { masterClienteId: id } } });
+    const fila = r.filas.find((f) => f.wr === "WR839943")!;
+
+    expect(fila).toMatchObject({ accion: "vinculado", casillero: "CBX444444", clienteNombreOficial: "MARIA ELIZABETH GILER TORRES" });
+    expect(r.vinculados).toBe(1);
+    const paquete = mocks.paquetesCreate.mock.calls.find((c) => c[0].wr === "WR839943")![0];
+    expect(String(paquete.masterClienteId)).toBe(id);
+    // No se creó un cliente para esa fila.
+    expect(mocks.clientesCreate).not.toHaveBeenCalledWith(expect.objectContaining({ nombreOficial: "MARIA ELIZABETH GILER" }));
+    // La grafía del manifiesto queda como alias del cliente elegido.
+    expect(mocks.aliasesCreate).toHaveBeenCalledWith(expect.objectContaining({ masterId: new mongoose.Types.ObjectId(id), variacion: "MARIA ELIZABETH GILER" }));
+  });
+
+  it("una decisión de crear nuevo evita que un parecido alto se vincule solo", async () => {
+    conClientes([{ _id: "b".repeat(24), nombreOficial: "MARIA ELIZABETH GILLER", codigoCasillero: "CBX222222" }]);
+
+    const r = await procesarIngresoCarga(ARCHIVO, { aplicar: true, decisiones: { WR839943: { crearNuevo: true } } });
+    const fila = r.filas.find((f) => f.wr === "WR839943")!;
+
+    expect(fila.accion).toBe("creado");
+    expect(mocks.clientesCreate).toHaveBeenCalledWith(expect.objectContaining({ nombreOficial: "MARIA ELIZABETH GILER" }));
+  });
+
+  it("si el cliente elegido ya no existe, la fila queda en error y no se inventa nada", async () => {
+    conClientes([]);
+
+    const r = await procesarIngresoCarga(ARCHIVO, { aplicar: true, decisiones: { WR839943: { masterClienteId: "e".repeat(24) } } });
+    const fila = r.filas.find((f) => f.wr === "WR839943")!;
+
+    expect(fila.accion).toBe("error");
+    expect(fila.detalle).toContain("ya no existe");
+    expect(mocks.paquetesCreate).not.toHaveBeenCalledWith(expect.objectContaining({ wr: "WR839943" }));
+  });
+});

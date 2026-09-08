@@ -28,6 +28,8 @@ import { logger } from "../utils/logger";
  */
 
 export const UMBRAL_APROXIMADO = 0.85;
+/** Parecidos que no alcanzan para decidir solos, pero sí para ofrecerlos al operador (misma vara que Homologación). */
+export const UMBRAL_SUGERENCIA = 0.55;
 
 /** Cabeceras aceptadas, normalizadas (mayúsculas, sin tildes, espacios simples). */
 const COLUMNAS: Record<string, string[]> = {
@@ -75,7 +77,22 @@ export type AccionCliente =
   | "alias"
   | "aproximado"
   | "creado"
+  | "vinculado"
   | "sin_cliente";
+
+/** Lo que el operador decidió a mano para una caja, por WR, desde la previsualización. */
+export interface DecisionFila {
+  masterClienteId?: string;
+  crearNuevo?: boolean;
+}
+export type Decisiones = Record<string, DecisionFila>;
+
+export interface SugerenciaCliente {
+  masterId: string;
+  nombreOficial: string;
+  casillero: string;
+  score: number;
+}
 
 export interface ResultadoFila {
   fila: number;
@@ -95,6 +112,8 @@ export interface ResultadoFila {
   coincideCon?: string;
   paquete?: "nuevo" | "actualizado";
   detalle?: string;
+  /** Clientes parecidos para vincular a mano cuando el nombre no cuadró solo. */
+  sugerencias?: SugerenciaCliente[];
 }
 
 export interface ResultadoIngreso {
@@ -103,6 +122,7 @@ export interface ResultadoIngreso {
   clientesExistentes: number;
   clientesCreados: number;
   aproximados: number;
+  vinculados: number;
   sinCliente: number;
   paquetesNuevos: number;
   paquetesActualizados: number;
@@ -356,6 +376,34 @@ class ResolutorClientes {
     return { accion: "creado", cliente: null };
   }
 
+  porId(id: string): ClienteCache | null {
+    return this.todos.find((c) => c.id === id) ?? null;
+  }
+
+  /** Los parecidos que no bastaron para decidir, ordenados por parecido, para que el operador elija. */
+  sugerir(clienteRaw: string, maximo = 5): SugerenciaCliente[] {
+    const clave = claveNombre(clienteRaw);
+    if (!clave) return [];
+    const vistos = new Set<string>();
+    const candidatos: SugerenciaCliente[] = [];
+    const considerar = (c: ClienteCache, score: number) => {
+      if (!c.id || score < UMBRAL_SUGERENCIA) return;
+      const previo = candidatos.find((x) => x.masterId === c.id);
+      if (previo) {
+        if (score > previo.score) previo.score = Number(score.toFixed(3));
+        return;
+      }
+      vistos.add(c.id);
+      candidatos.push({ masterId: c.id, nombreOficial: c.nombreOficial, casillero: c.casillero, score: Number(score.toFixed(3)) });
+    };
+    for (const c of this.todos) considerar(c, similitud(clave, c.clave));
+    for (const a of this.aliases) {
+      const dueno = this.porId(a.masterId);
+      if (dueno) considerar(dueno, similitud(clave, a.clave));
+    }
+    return candidatos.sort((a, b) => b.score - a.score).slice(0, maximo);
+  }
+
   /** Registra un cliente que el lote creará, para que las filas siguientes lo reutilicen. */
   registrarNuevo(clienteRaw: string, cliente: ClienteCache) {
     const clave = claveNombre(clienteRaw);
@@ -389,10 +437,11 @@ const ESTADOS_CERRADOS = new Set(["facturado", "pagado", "despachado"]);
 
 export async function procesarIngresoCarga(
   buffer: Buffer,
-  opciones: { aplicar: boolean; origenNota?: string }
+  opciones: { aplicar: boolean; origenNota?: string; decisiones?: Decisiones }
 ): Promise<ResultadoIngreso> {
   const { filas, errores } = leerIngresoCarga(buffer);
   const resolutor = await cargarResolutor();
+  const decisiones = opciones.decisiones ?? {};
 
   const resultado: ResultadoIngreso = {
     aplicado: opciones.aplicar,
@@ -400,6 +449,7 @@ export async function procesarIngresoCarga(
     clientesExistentes: 0,
     clientesCreados: 0,
     aproximados: 0,
+    vinculados: 0,
     sinCliente: 0,
     paquetesNuevos: 0,
     paquetesActualizados: 0,
@@ -427,7 +477,18 @@ export async function procesarIngresoCarga(
     };
 
     try {
-      const res = resolutor.resolver(fila.clienteRaw);
+      // Lo que el operador decidió en la previsualización manda sobre el emparejamiento.
+      const decision = decisiones[fila.wr];
+      let res: Resolucion;
+      if (decision?.masterClienteId) {
+        const elegido = resolutor.porId(decision.masterClienteId);
+        if (!elegido) throw new Error(`El cliente elegido para vincular ya no existe (${decision.masterClienteId})`);
+        res = { accion: "vinculado", cliente: elegido };
+      } else if (decision?.crearNuevo) {
+        res = { accion: "creado", cliente: null };
+      } else {
+        res = resolutor.resolver(fila.clienteRaw);
+      }
       let cliente = res.cliente;
 
       if (res.accion === "creado" && !cliente) {
@@ -458,9 +519,13 @@ export async function procesarIngresoCarga(
         base.clienteNombreOficial = cliente.nombreOficial;
         base.casillero = cliente.casillero;
       }
+      if (!opciones.aplicar && (res.accion === "creado" || res.accion === "aproximado")) {
+        base.sugerencias = resolutor.sugerir(fila.clienteRaw);
+      }
 
       if (res.accion === "existente" || res.accion === "alias") resultado.clientesExistentes++;
       else if (res.accion === "aproximado") resultado.aproximados++;
+      else if (res.accion === "vinculado") resultado.vinculados++;
       else if (res.accion === "creado") {
         // Un mismo nombre repetido en el archivo cuenta como un cliente, no como N.
         const clave = claveNombre(fila.clienteRaw);
@@ -473,7 +538,7 @@ export async function procesarIngresoCarga(
       // Recordar la grafía del manifiesto. Este importador ya la reconocería
       // por la clave, pero el de manifiestos antiguos compara el texto crudo:
       // sin el alias, "NORMA BANO MP" no le cuadra con "NORMA BANO".
-      if (opciones.aplicar && cliente?.id && (res.accion === "aproximado" || res.accion === "creado")) {
+      if (opciones.aplicar && cliente?.id && ["aproximado", "creado", "vinculado"].includes(res.accion)) {
         const variacion = fila.clienteRaw.trim();
         if (variacion && variacion.toUpperCase() !== cliente.nombreOficial.toUpperCase()) {
           const existe = await models.clienteAliases.findOne({
