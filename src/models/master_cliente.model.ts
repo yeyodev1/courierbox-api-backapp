@@ -6,6 +6,8 @@ export interface IMasterCliente extends Document {
   nombreOficial: string;
   email: string;
   telefono: string;
+  /** Para la factura electrónica; vacío en los clientes importados del manifiesto. */
+  direccion: string;
   subagencyId: string;
   notas: string;
   createdAt: Date;
@@ -19,6 +21,7 @@ const masterClienteSchema = new Schema<IMasterCliente>(
     nombreOficial: { type: String, required: true },
     email: { type: String, default: "" },
     telefono: { type: String, default: "" },
+    direccion: { type: String, default: "" },
     subagencyId: { type: String, default: "" },
     notas: { type: String, default: "" },
   },

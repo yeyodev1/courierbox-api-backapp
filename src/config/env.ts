@@ -43,11 +43,18 @@ const schema = z.object({
   // Courier Box's own WhatsApp line. There is no CRM or WhatsApp API here: the
   // backend composes the message and builds a wa.me link to this number.
   COURIER_WHATSAPP_NUMBER: z.string().default("13478248937"),
-  CONTIFICO_API_URL: z.string().default("https://api.contifico.com/v1"),
+  // La API real vive bajo /sistema/api/v1 y autentica con `Authorization: <API_KEY>`
+  // (sin Bearer); el token es el del punto de venta (`pos`) que firma cada documento.
+  CONTIFICO_API_URL: z.string().default("https://api.contifico.com/sistema/api/v1"),
   CONTIFICO_API_KEY: z.string().default(""),
   CONTIFICO_TOKEN: z.string().default(""),
   CONTIFICO_PUNTO_EMISION: z.string().default("001"),
   CONTIFICO_ESTABLECIMIENTO: z.string().default("001"),
+  // Códigos de producto en el catálogo de Contifico de Courier Box. El flete es
+  // el servicio con IVA que ya usan a mano; el arancel se refactura como
+  // reembolso de impuestos, sin IVA.
+  CONTIFICO_PRODUCTO_FLETE: z.string().default("CATB01"),
+  CONTIFICO_PRODUCTO_ARANCEL: z.string().default("REEMB"),
   STORAGE_BASE_URL: z.string().default("/uploads"),
 
   // --- Cloudinary ---
