@@ -326,7 +326,7 @@ export async function getHistorialFacturas(req: Request, res: Response, next: Ne
     const facturas = await models.facturas
       .find(filtro)
       .populate("paquetes", "wr sh contenido pesoLb")
-      .populate("masterClienteId", "nombreOficial codigoCasillero")
+      .populate("masterClienteId", "nombreOficial codigoCasillero cedulaRuc")
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(req.query.limit) || 50, 200))
       .lean();
