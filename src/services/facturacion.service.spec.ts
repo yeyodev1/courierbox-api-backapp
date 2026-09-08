@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   clientesFindById: vi.fn(),
   clientesFindOne: vi.fn(),
   clientesFindByIdAndUpdate: vi.fn(),
+  clientesFind: vi.fn(),
   facturasCreate: vi.fn(),
   emitirFactura: vi.fn(),
   createAndSendNotification: vi.fn(),
@@ -15,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../models/index", () => ({
   models: {
     paquetes: { find: mocks.paquetesFind, updateMany: mocks.paquetesUpdateMany },
-    masterClientes: { findById: mocks.clientesFindById, findOne: mocks.clientesFindOne, findByIdAndUpdate: mocks.clientesFindByIdAndUpdate },
+    masterClientes: { findById: mocks.clientesFindById, findOne: mocks.clientesFindOne, findByIdAndUpdate: mocks.clientesFindByIdAndUpdate, find: mocks.clientesFind },
     facturas: { create: mocks.facturasCreate },
   },
 }));
@@ -30,6 +31,7 @@ import {
   cedulaValida,
   completarDatosCliente,
   facturarPaquetes,
+  listarFacturables,
   identificacionValida,
   rucValido,
   validarClienteParaFactura,
@@ -203,5 +205,22 @@ describe("facturarPaquetes", () => {
     const r = await facturarPaquetes([String(paquetes[0]._id)]);
 
     expect(r).toMatchObject({ exito: false, error: expect.stringContaining("ya tiene factura") });
+  });
+});
+
+describe("listarFacturables", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("también encuentra las cajas de un cliente buscando por su casillero", async () => {
+    const clienteId = new mongoose.Types.ObjectId();
+    mocks.clientesFind.mockReturnValue({ select: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue([{ _id: clienteId }]) });
+    const query = { populate: vi.fn().mockReturnThis(), sort: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue([]) };
+    mocks.paquetesFind.mockReturnValue(query);
+
+    await listarFacturables("CBX640302");
+
+    const filtro = mocks.paquetesFind.mock.calls[0][0];
+    expect(filtro.$or).toContainEqual({ masterClienteId: { $in: [clienteId] } });
+    expect(mocks.clientesFind).toHaveBeenCalledWith({ $or: [{ codigoCasillero: expect.any(RegExp) }, { nombreOficial: expect.any(RegExp) }] });
   });
 });
