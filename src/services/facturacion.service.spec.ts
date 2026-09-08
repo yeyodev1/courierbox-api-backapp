@@ -225,6 +225,31 @@ describe("facturarPaquetes", () => {
     expect(mocks.emitirFactura.mock.calls[0][0].lineas[0]).toMatchObject({ codigoProducto: "CATB01", porcentajeIva: 0 });
   });
 
+  /** El cliente pide que la factura salga a nombre de su empresa: un perfil alterno. */
+  it("con perfilId factura con los datos de ese perfil y lo deja registrado en facturadoA", async () => {
+    const perfilId = new mongoose.Types.ObjectId();
+    mocks.clientesFindById.mockReturnValue(lean({
+      ...cliente,
+      perfilesFacturacion: [{ _id: perfilId, etiqueta: "Mi empresa", identificacion: "0993388549001", razonSocial: "Courier Box S.A.S.", email: "factura@courierbox.com", telefono: "", direccion: "Guayaquil" }],
+    }));
+    mocks.emitirFactura.mockResolvedValue({ exito: true, id: "c", numero: "001-001-000000892", estadoSri: "autorizado", autorizacion: "", urlRide: "", urlXml: "", mensaje: "", raw: {} });
+
+    const r = await facturarPaquetes([String(paquetes[0]._id)], { perfilId: String(perfilId) });
+
+    expect(r.exito).toBe(true);
+    expect(mocks.emitirFactura.mock.calls[0][0].cliente).toMatchObject({ identificacion: "0993388549001", razonSocial: "Courier Box S.A.S.", email: "factura@courierbox.com" });
+    expect(mocks.facturasCreate).toHaveBeenCalledWith(expect.objectContaining({
+      facturadoA: { perfilId: String(perfilId), identificacion: "0993388549001", razonSocial: "Courier Box S.A.S.", email: "factura@courierbox.com" },
+    }));
+    expect(r.exito && r.factura.clienteNombre).toBe("Courier Box S.A.S.");
+  });
+
+  it("un perfil que ya no existe no factura a ciegas con los datos del cliente", async () => {
+    const r = await facturarPaquetes([String(paquetes[0]._id)], { perfilId: new mongoose.Types.ObjectId().toString() });
+    expect(r).toMatchObject({ exito: false, error: expect.stringContaining("ya no existe") });
+    expect(mocks.emitirFactura).not.toHaveBeenCalled();
+  });
+
   it("no factura dos veces un paquete que ya tiene factura", async () => {
     mocks.paquetesFind.mockReturnValue(lean([{ ...paquetes[0], facturaId: new mongoose.Types.ObjectId() }]));
 
