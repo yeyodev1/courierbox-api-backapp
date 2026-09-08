@@ -221,7 +221,18 @@ export async function completarDatosCliente(
  */
 export async function listarFacturables(q: string) {
   const term = (q ?? "").trim();
-  if (term.length < 2) return { paquetes: [], tarifas: TARIFAS };
+
+  // Sin búsqueda, el counter ve lo último que entró y sigue sin factura: para
+  // elegir una caja no hace falta saber de antemano qué escribir.
+  if (term.length < 2) {
+    const paquetes = await models.paquetes
+      .find({ estado: { $in: ["importado", "validado", "pendiente_validacion"] }, facturaId: null, masterClienteId: { $ne: null } })
+      .populate("masterClienteId", "nombreOficial cedulaRuc email telefono direccion codigoCasillero")
+      .sort({ createdAt: -1 })
+      .limit(60)
+      .lean();
+    return { paquetes, tarifas: TARIFAS };
+  }
 
   const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   // También por casillero o nombre oficial del cliente: es como el counter
