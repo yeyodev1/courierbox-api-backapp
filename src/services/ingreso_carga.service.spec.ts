@@ -78,6 +78,14 @@ describe("lectura de la hoja de Ingreso de carga", () => {
     expect(parsearWr("sin nada")).toEqual({ wr: "", nota: "sin nada" });
   });
 
+  it("acepta el BOX ID sin el prefijo WR, con guion o como número", () => {
+    expect(parsearWr("846668")).toEqual({ wr: "WR846668", nota: "" });
+    expect(parsearWr(846668)).toEqual({ wr: "WR846668", nota: "" });
+    expect(parsearWr("846668 DIVIDIDO")).toEqual({ wr: "WR846668", nota: "DIVIDIDO" });
+    expect(parsearWr("WR-846668")).toEqual({ wr: "WR846668", nota: "" });
+    expect(parsearWr("DIVIDIDO 3")).toEqual({ wr: "", nota: "DIVIDIDO 3" });
+  });
+
   it("entiende pesos escritos como texto con espacios y comas", () => {
     expect(parsearPeso("1.5 ")).toBe(1.5);
     expect(parsearPeso("0,25")).toBe(0.25);
@@ -358,20 +366,22 @@ describe("ingreso manual, caja por caja", () => {
 
   it("exige el formato del manifiesto: WR, MG, peso y fecha", () => {
     const { filas, errores } = filasDesdeManual([
-      { wr: "839943", cliente: "X", peso: 1 },
+      { wr: "caja", cliente: "X", peso: 1 },
       { wr: "WR1", mg: "2516", cliente: "X", peso: 1 },
       { wr: "WR2", cliente: "X", peso: 0 },
       { wr: "WR3", cliente: "X", peso: 2, fecha: "no" },
       { wr: "wr 4", mg: "mg002516", cliente: "  Norma  Bano MP ", peso: "1,5", fecha: "2026-08-25", reempaque: "si", tracking: "_tba1_" },
+      { wr: "839943", cliente: "X", peso: 1 },
     ]);
     expect(errores).toHaveLength(4);
     expect(errores[0]).toContain("WR seguido de números");
     expect(errores[1]).toContain("MG seguido de números");
     expect(errores[2]).toContain("mayor que 0");
     expect(errores[3]).toContain("fecha no es válida");
-    expect(filas).toHaveLength(1);
+    expect(filas).toHaveLength(2);
     expect(filas[0]).toMatchObject({ wr: "WR4", mg: "MG002516", clienteRaw: "Norma Bano MP", pesoLb: 1.5, reempaque: true, tracking: "tba1" });
     expect(filas[0].fechaIngreso?.toISOString().slice(0, 10)).toBe("2026-08-25");
+    expect(filas[1].wr).toBe("WR839943");
   });
 
   it("pasa por el mismo motor que el Excel: previsualiza sin escribir y aplica creando el cliente", async () => {

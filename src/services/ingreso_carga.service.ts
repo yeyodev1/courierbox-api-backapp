@@ -196,12 +196,23 @@ function parsearReempaque(raw: unknown): boolean | null {
   return null;
 }
 
-/** "WR846668 DIVIDIDO" → { wr: "WR846668", nota: "DIVIDIDO" }. */
+/**
+ * "WR846668 DIVIDIDO" → { wr: "WR846668", nota: "DIVIDIDO" }.
+ *
+ * La bodega no siempre escribe el prefijo: en la hoja el BOX ID llega como
+ * "846668" a secas (o como número, si la celda es numérica), o con guion
+ * ("WR-846668"). Todo eso es el mismo WR, así que se normaliza a "WR" +
+ * dígitos, que es la forma con la que el resto del sistema busca la caja.
+ */
 export function parsearWr(raw: unknown): { wr: string; nota: string } {
-  const texto = String(raw ?? "").trim();
-  const match = texto.match(/(WR\s*\d+)/i);
+  const texto = typeof raw === "number" && Number.isFinite(raw) ? String(Math.trunc(raw)) : String(raw ?? "").trim();
+  const conPrefijo = texto.match(/(WR[\s\-_.]*\d+)/i);
+  // Sin prefijo: un número de al menos 4 cifras que va solo en la celda o acompañado de una nota.
+  const soloNumero = conPrefijo ? null : texto.match(/(?:^|\s)(\d{4,})(?=\s|$)/);
+  const match = conPrefijo ?? soloNumero;
   if (!match) return { wr: "", nota: texto };
-  const wr = match[1].replace(/\s+/g, "").toUpperCase();
+  const digitos = match[1].replace(/\D/g, "");
+  const wr = `WR${digitos}`;
   const nota = texto.replace(match[1], "").replace(/\s{2,}/g, " ").trim();
   return { wr, nota };
 }
@@ -244,9 +255,14 @@ export function leerIngresoCarga(buffer: Buffer): { filas: FilaIngreso[]; errore
     const vacia = row.every((c) => String(c ?? "").trim() === "");
     if (vacia) continue;
 
+    const crudoWr = String(celda(row, "wr") ?? "").trim();
     const { wr, nota } = parsearWr(celda(row, "wr"));
     if (!wr) {
-      errores.push(`Fila ${numeroFila}: sin BOX ID (WR); se omitió.`);
+      errores.push(
+        crudoWr
+          ? `Fila ${numeroFila}: el BOX ID "${crudoWr}" no tiene la forma WR seguido de números (ej. WR839943); se omitió.`
+          : `Fila ${numeroFila}: sin BOX ID (WR); se omitió.`
+      );
       continue;
     }
 
@@ -474,7 +490,7 @@ export function filasDesdeManual(entrada: unknown): { filas: FilaIngreso[]; erro
     const numero = i + 1;
     const { wr, nota } = parsearWr(r?.wr);
     if (!wr) {
-      errores.push(`Caja ${numero}: el BOX ID debe tener la forma WR seguido de números (ej. WR839943).`);
+      errores.push(`Caja ${numero}: el BOX ID debe tener la forma WR seguido de números (ej. WR839943 o sólo 839943).`);
       return;
     }
     const mg = texto(r?.mg).toUpperCase();
