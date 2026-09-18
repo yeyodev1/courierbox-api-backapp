@@ -4,6 +4,8 @@ import { requireAuth, requireRole } from "../middleware/auth.middleware";
 import type { UserRole } from "../models/user.model";
 import {
   listEnvios,
+  exportEnviosExcel,
+  exportEnviosPdf,
   getEnvio,
   createEnvio,
   updateEnvio,
@@ -44,6 +46,8 @@ router.use(requireAuth);
 // Read + delivery execution: staff and motorizados (controller scopes motorizados to their own).
 router.get("/", requireRole(OPERATIONS_AND_MOTORIZADO), listEnvios);
 router.get("/resumen", requireRole(OPERATIONS), resumenEnvios);
+router.get("/export/excel", requireRole(OPERATIONS), exportEnviosExcel);
+router.get("/export/pdf", requireRole(OPERATIONS), exportEnviosPdf);
 router.get("/motorizados", requireRole(OPERATIONS), listMotorizados);
 router.post("/motorizados", requireRole(USER_MANAGERS), createMotorizado);
 router.delete("/motorizados/:id", requireRole(USER_MANAGERS), deleteMotorizado);
