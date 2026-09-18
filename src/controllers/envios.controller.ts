@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
+import xlsx from "xlsx";
 import { models } from "../models/index";
+import { htmlToPdf } from "../services/pdf.service";
 import { uploadEnvioEvidencia, uploadEnvioGuia } from "../services/upload.service";
 import { sendCredenciales } from "../services/email.service";
 import { createAndSendNotification } from "../services/notification.service";
@@ -38,23 +40,53 @@ function buildDateMatch(desde?: unknown, hasta?: unknown) {
   return match;
 }
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Filters shared by the listing and its exports, so a download matches what is on screen. */
+function buildEnviosQuery(req: Request) {
+  const user = getUser(req);
+  const { estado, modo, paqueteId, asignadoA, desde, hasta, q } = req.query;
+  const query: Record<string, any> = {};
+  if (estado) query.estado = String(estado);
+  if (modo === "local" || modo === "interprovincial") query.modo = modo;
+  if (paqueteId) query.paqueteId = String(paqueteId);
+
+  // Motorizados only ever see the deliveries assigned to them.
+  if (isMotorizado(user)) {
+    query.asignadoA = user?.userId;
+  } else if (asignadoA === "none") {
+    query.asignadoA = null;
+  } else if (asignadoA) {
+    query.asignadoA = String(asignadoA);
+  }
+
+  const dateMatch = buildDateMatch(desde, hasta);
+  if (dateMatch) query.createdAt = dateMatch;
+
+  const term = String(q ?? "").trim();
+  if (term) {
+    const rx = new RegExp(escapeRegex(term), "i");
+    query.$or = [
+      { clienteNombre: rx },
+      { clienteDireccion: rx },
+      { clienteTelefono: rx },
+      { ciudadDestino: rx },
+      { numeroInvoice: rx },
+      { proveedorUtilizado: rx },
+      { "trayectoLocal.proveedorNombre": rx },
+      { "trayectoLocal.tracking": rx },
+    ];
+  }
+
+  return query;
+}
+
 export async function listEnvios(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const user = getUser(req);
-    const { estado, paqueteId, asignadoA, desde, hasta, limit, offset } = req.query;
-    const query: Record<string, any> = {};
-    if (estado) query.estado = estado;
-    if (paqueteId) query.paqueteId = paqueteId;
-
-    // Motorizados only ever see the deliveries assigned to them.
-    if (isMotorizado(user)) {
-      query.asignadoA = user?.userId;
-    } else if (asignadoA) {
-      query.asignadoA = asignadoA;
-    }
-
-    const dateMatch = buildDateMatch(desde, hasta);
-    if (dateMatch) query.createdAt = dateMatch;
+    const { limit, offset } = req.query;
+    const query = buildEnviosQuery(req);
 
     const take = Math.min(parseInt(limit as string) || 50, 200);
     const skip = parseInt(offset as string) || 0;
@@ -73,6 +105,185 @@ export async function listEnvios(req: Request, res: Response, next: NextFunction
     ]);
 
     res.status(200).json({ envios, total });
+  } catch (error) {
+    next(error);
+  }
+}
+
+const ESTADO_LABEL: Record<string, string> = {
+  pendiente: "Pendiente",
+  asignado: "Asignado",
+  en_ruta: "En ruta",
+  entregado: "Entregado",
+  fallido: "Fallido",
+  reprogramado: "Reprogramado",
+};
+
+const EXPORT_MAX_ROWS = 5000;
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fechaEc(value?: Date | string | null) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil", day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+async function loadEnviosExportRows(req: Request) {
+  const envios = await models.enviosDomicilio
+    .find(buildEnviosQuery(req))
+    .populate("paqueteId", "wr sh")
+    .populate("asignadoA", "name email")
+    .sort({ createdAt: -1 })
+    .limit(EXPORT_MAX_ROWS)
+    .lean();
+
+  return envios.map((e: any) => {
+    // Older records carry their cost on the legs; new ones on the provider payment.
+    const costo = (e.valorPagadoProveedor || 0) + (e.trayectoUsa?.costo || 0) + (e.trayectoLocal?.costo || 0);
+    const cobrado = e.valorCobrado || 0;
+    return {
+      ID: `#${String(e._id).slice(-6).toUpperCase()}`,
+      Fecha: fechaEc(e.createdAt),
+      Modo: e.modo === "interprovincial" ? "Interprovincial" : "Local",
+      Cliente: e.clienteNombre || "",
+      Telefono: e.clienteTelefono || "",
+      Direccion: e.clienteDireccion || "",
+      Ciudad: e.ciudadDestino || "",
+      Paquete: e.paqueteId?.wr || e.paqueteId?.sh || "",
+      Proveedor: e.proveedorUtilizado || e.trayectoLocal?.proveedorNombre || e.trayectoUsa?.proveedorNombre || "",
+      "Pago Proveedor": e.modo === "interprovincial" ? (e.trayectoLocal?.pagado ? "Pagado" : "Pendiente") : "",
+      Motorizado: e.asignadoA?.name || e.asignadoA?.email || e.asignadoNombre || "Sin asignar",
+      Estado: ESTADO_LABEL[e.estado] || e.estado,
+      Costo: Number(costo.toFixed(2)),
+      Cobrado: Number(cobrado.toFixed(2)),
+      Saldo: Number((cobrado - costo).toFixed(2)),
+      Entregado: fechaEc(e.entregadoEn),
+      "Recibido Por": [e.recibidoPorNombre, e.recibidoPorApellido].filter(Boolean).join(" "),
+      Novedad: e.novedad || "",
+      Notas: e.notas || "",
+    };
+  });
+}
+
+function exportPeriodo(req: Request) {
+  const { desde, hasta } = req.query;
+  if (desde && hasta) return `Período: ${fechaEc(`${desde}T12:00:00`)} al ${fechaEc(`${hasta}T12:00:00`)}`;
+  return `Generado: ${fechaEc(new Date())}`;
+}
+
+function exportFilename(req: Request, extension: string) {
+  const { desde, hasta } = req.query;
+  const rango = desde && hasta ? `${desde}_${hasta}` : new Date().toISOString().slice(0, 10);
+  return `envios_domicilio_${String(rango).replace(/[^0-9_-]/g, "")}.${extension}`;
+}
+
+// GET /api/v1/envios/export/excel
+export async function exportEnviosExcel(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const rows = await loadEnviosExportRows(req);
+    const ws = xlsx.utils.json_to_sheet(rows);
+    for (let row = 2; row <= rows.length + 1; row += 1) {
+      for (const column of ["M", "N", "O"]) {
+        if (ws[`${column}${row}`]) ws[`${column}${row}`].z = "$0.00";
+      }
+    }
+    ws["!cols"] = [
+      { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 28 }, { wch: 14 }, { wch: 40 }, { wch: 16 },
+      { wch: 14 }, { wch: 24 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 10 },
+      { wch: 10 }, { wch: 12 }, { wch: 24 }, { wch: 30 }, { wch: 30 },
+    ];
+
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, "Envíos a Domicilio");
+    const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(req, "xlsx")}"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(buf);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// GET /api/v1/envios/export/pdf
+export async function exportEnviosPdf(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const rows = await loadEnviosExportRows(req);
+    const totals = rows.reduce(
+      (acc, r) => ({ costo: acc.costo + r.Costo, cobrado: acc.cobrado + r.Cobrado, saldo: acc.saldo + r.Saldo }),
+      { costo: 0, cobrado: 0, saldo: 0 },
+    );
+
+    const body = rows
+      .map(
+        (r) => `
+        <tr>
+          <td>${escapeHtml(r.ID)}</td>
+          <td>${escapeHtml(r.Fecha)}</td>
+          <td>${escapeHtml(r.Modo)}</td>
+          <td>${escapeHtml(r.Cliente)}<div class="sub">${escapeHtml(r.Direccion)}</div></td>
+          <td>${escapeHtml(r.Ciudad)}</td>
+          <td>${escapeHtml(r.Paquete)}</td>
+          <td>${escapeHtml(r.Proveedor)}</td>
+          <td>${escapeHtml(r.Motorizado)}</td>
+          <td>${escapeHtml(r.Estado)}</td>
+          <td class="right">$${r.Costo.toFixed(2)}</td>
+          <td class="right">$${r.Cobrado.toFixed(2)}</td>
+          <td>${escapeHtml(r.Novedad)}</td>
+        </tr>`,
+      )
+      .join("");
+
+    const html = `
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Helvetica, Arial, sans-serif; color: #1f2937; padding: 24px; }
+          h1 { font-size: 20px; margin-bottom: 4px; }
+          .period { color: #6b7280; font-size: 12px; margin-bottom: 16px; }
+          table { width: 100%; border-collapse: collapse; font-size: 10px; }
+          th, td { border: 1px solid #d1d5db; padding: 6px; text-align: left; vertical-align: top; }
+          th { background: #f3f4f6; font-weight: 700; }
+          tr { page-break-inside: avoid; }
+          .sub { color: #6b7280; font-size: 9px; }
+          .right { text-align: right; white-space: nowrap; }
+          .totals { margin-top: 16px; font-size: 11px; width: auto; margin-left: auto; }
+          .totals td { border: none; padding: 4px 6px; text-align: right; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <h1>Envíos a Domicilio</h1>
+        <div class="period">${escapeHtml(exportPeriodo(req))}</div>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Fecha</th><th>Modo</th><th>Cliente</th><th>Ciudad</th><th>Paquete</th>
+              <th>Proveedor</th><th>Motorizado</th><th>Estado</th><th>Costo</th><th>Cobrado</th><th>Novedad</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+        <table class="totals">
+          <tr><td>Total envíos:</td><td>${rows.length}</td></tr>
+          <tr><td>Suma costo:</td><td>$${totals.costo.toFixed(2)}</td></tr>
+          <tr><td>Suma cobrado:</td><td>$${totals.cobrado.toFixed(2)}</td></tr>
+          <tr><td>Saldo:</td><td>$${totals.saldo.toFixed(2)}</td></tr>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const pdf = await htmlToPdf(html);
+    res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(req, "pdf")}"`);
+    res.setHeader("Content-Type", "application/pdf");
+    res.send(pdf);
   } catch (error) {
     next(error);
   }
