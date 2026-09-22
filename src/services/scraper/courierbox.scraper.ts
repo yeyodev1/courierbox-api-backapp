@@ -1,6 +1,7 @@
 import { env } from "../../config/env";
 import { logger } from "../../utils/logger";
 import { withContext } from "./browser";
+import { parseFecha } from "./fecha";
 import type {
   EstadoCanonico,
   TrackingCosto,
@@ -49,33 +50,6 @@ function parseLb(s: string | null | undefined): number | null {
   if (!m || !m[1]) return null;
   const n = Number(m[1].replace(",", "."));
   return Number.isNaN(n) ? null : n;
-}
-
-function parseFecha(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const t = raw.trim();
-  // dd/mm/yyyy [hh:mm[:ss]] [am|pm]
-  const m = t.match(
-    /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?\s*m\.?)?)?/i
-  );
-  if (m && m[1] && m[2] && m[3]) {
-    const mo = m[1];
-    const d = m[2];
-    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-    let hh = m[4] ? Number(m[4]) : 0;
-    const mm = m[5] ? Number(m[5]) : 0;
-    const ss = m[6] ? Number(m[6]) : 0;
-    const ampm = (m[7] || "").toLowerCase().replace(/[.\s]/g, "");
-    if (ampm === "pm" && hh < 12) hh += 12;
-    if (ampm === "am" && hh === 12) hh = 0;
-    const dt = new Date(
-      `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
-    );
-    if (!Number.isNaN(dt.getTime())) return dt.toISOString();
-  }
-  const iso = Date.parse(t);
-  if (!Number.isNaN(iso)) return new Date(iso).toISOString();
-  return null;
 }
 
 function baseUrlOf(u: string): string {
