@@ -20,6 +20,7 @@ import {
   postPerfilCliente,
   putPerfilCliente,
   deletePerfilCliente,
+  anular,
 } from "../controllers/facturacion.controller";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -47,5 +48,7 @@ facturacionRouter.post("/generar", requireAuth, counterAccess, generarFactura);
 facturacionRouter.get("/pendientes/:casillero", getFacturasPendientes);
 facturacionRouter.post("/pagar", upload.single("comprobante"), registrarPago);
 facturacionRouter.post("/confirmar/:facturaId", requireAuth, financeOnly, confirmarPago);
+// Anular deja las cajas otra vez por facturar: sólo quien administra las finanzas.
+facturacionRouter.post("/:facturaId/anular", requireAuth, financeOnly, anular);
 // El counter también necesita ver qué se facturó (número, estado SRI, PDF).
 facturacionRouter.get("/historial", requireAuth, counterAccess, getHistorialFacturas);
