@@ -114,6 +114,8 @@ export interface ResultadoFila {
   detalle?: string;
   /** Clientes parecidos para vincular a mano cuando el nombre no cuadró solo. */
   sugerencias?: SugerenciaCliente[];
+  /** Al aplicar: la caja guardada, para imprimir su etiqueta sin buscarla. */
+  paqueteId?: string;
 }
 
 export interface ResultadoIngreso {
@@ -701,8 +703,10 @@ async function procesarFilasIngreso(
       if (opciones.aplicar) {
         if (existente) {
           await models.paquetes.updateOne({ _id: existente._id }, { $set: doc });
+          base.paqueteId = String(existente._id);
         } else {
-          await models.paquetes.create({ ...doc, facturaId: null });
+          const creado = await models.paquetes.create({ ...doc, facturaId: null });
+          base.paqueteId = String(creado._id);
         }
       }
     } catch (err: any) {

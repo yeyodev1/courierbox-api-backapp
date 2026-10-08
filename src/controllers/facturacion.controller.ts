@@ -1,10 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { models } from "../models/index";
-import { guardarIvaPorcentaje, obtenerIvaPorcentaje, IVA_PORCENTAJES_PERMITIDOS } from "../services/configuracion_facturacion.service";
+import { guardarIvaPorcentaje, guardarTarifasBase, obtenerIvaPorcentaje, IVA_PORCENTAJES_PERMITIDOS } from "../services/configuracion_facturacion.service";
 import {
-  calcularTotales,
   completarDatosCliente,
+  previewTotales,
   obtenerTarifas,
   listarPerfiles,
   guardarPerfil,
@@ -14,6 +14,7 @@ import {
   registrarCobroContifico,
   sincronizarFacturaSri,
   validarSeleccion,
+  anularFactura,
 } from "../services/facturacion.service";
 import { uploadComprobante } from "../services/upload.service";
 import { contificoService } from "../services/contifico.service";
@@ -82,11 +83,19 @@ export async function getConfiguracionFacturacion(_req: Request, res: Response, 
   }
 }
 
-/** Cambia el IVA global. Aplica a los totales de todos y a la próxima factura. */
+/**
+ * Cambia el IVA global y/o la tarifa base por libra (flete y arancel). Aplica a
+ * los totales de todos y a la próxima factura; se manda sólo lo que cambia.
+ */
 export async function putConfiguracionFacturacion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const user = req.user as { email?: string } | undefined;
-    const ivaPorcentaje = await guardarIvaPorcentaje(req.body?.ivaPorcentaje, user?.email ?? "");
+    const body = req.body ?? {};
+    if (body.fleteLb !== undefined || body.arancelLb !== undefined) {
+      await guardarTarifasBase({ fleteLb: body.fleteLb, arancelLb: body.arancelLb }, user?.email ?? "");
+    }
+    const ivaPorcentaje =
+      body.ivaPorcentaje !== undefined ? await guardarIvaPorcentaje(body.ivaPorcentaje, user?.email ?? "") : await obtenerIvaPorcentaje();
     res.status(200).json({ ivaPorcentaje, tarifas: await obtenerTarifas() });
   } catch (err: any) {
     if (err?.status === 400) {
@@ -187,9 +196,7 @@ export async function previewFactura(req: Request, res: Response, next: NextFunc
       res.status(400).json({ error: "Se requiere un array de paqueteIds" });
       return;
     }
-    const paquetes = await models.paquetes.find({ _id: { $in: paqueteIds } }).select("pesoLb").lean();
-    const tarifas = await obtenerTarifas();
-    res.status(200).json({ totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0), tarifas.iva), tarifas });
+    res.status(200).json(await previewTotales(paqueteIds));
   } catch (err) {
     next(err);
   }
@@ -331,10 +338,26 @@ export async function confirmarPago(req: Request, res: Response, next: NextFunct
   }
 }
 
+export async function anular(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = (req as any).user;
+    const result = await anularFactura(String(req.params.facturaId), String(req.body?.motivo ?? ""), user?.userId ?? user?.id);
+    if (!result.exito) return void res.status(result.status).json({ error: result.error });
+    res.status(200).json({ message: "Factura anulada", factura: result.factura, paquetesLiberados: result.paquetesLiberados });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getHistorialFacturas(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const q = String(req.query.q ?? "").trim();
     const filtro: Record<string, unknown> = {};
+    // "anuladas" lista sólo las anuladas; por defecto el historial no las mezcla con las vigentes.
+    const estado = String(req.query.estado ?? "").trim();
+    if (estado === "anuladas") filtro.estado = "anulada";
+    else if (estado === "todas") { /* sin filtro */ }
+    else filtro.estado = { $ne: "anulada" };
     if (q.length >= 2) {
       const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       const clientes = await models.masterClientes.find({ $or: [{ nombreOficial: rx }, { codigoCasillero: rx }, { cedulaRuc: rx }] }).select("_id").lean();
@@ -344,6 +367,7 @@ export async function getHistorialFacturas(req: Request, res: Response, next: Ne
       .find(filtro)
       .populate("paquetes", "wr sh contenido pesoLb")
       .populate("masterClienteId", "nombreOficial codigoCasillero cedulaRuc")
+      .populate("anuladaPor", "name email")
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(req.query.limit) || 50, 200))
       .lean();

@@ -136,6 +136,10 @@ export async function uploadFirmaCounter(buffer: Buffer): Promise<UploadResult> 
   return uploadBuffer(buffer, "courierbox/counter/firmas");
 }
 
+export async function uploadLogoAliado(buffer: Buffer): Promise<UploadResult> {
+  return uploadBuffer(buffer, "courierbox/aliados/logos");
+}
+
 export async function uploadComprobanteRetiro(buffer: Buffer): Promise<UploadResult> {
   return uploadBuffer(buffer, "courierbox/counter/comprobantes");
 }

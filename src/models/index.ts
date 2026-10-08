@@ -22,6 +22,7 @@ import { SolicitudCompra } from "./solicitud_compra.model";
 import { ProductoInventario } from "./producto_inventario.model";
 import { VentaProducto } from "./venta_producto.model";
 import { Configuracion } from "./configuracion.model";
+import { Aliado } from "./aliado.model";
 
 export const models = {
   payments: Payment,
@@ -48,4 +49,5 @@ export const models = {
   productosInventario: ProductoInventario,
   ventasProducto: VentaProducto,
   configuraciones: Configuracion,
+  aliados: Aliado,
 };
