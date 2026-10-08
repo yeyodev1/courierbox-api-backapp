@@ -4,7 +4,8 @@ export type EstadoFactura =
   | "pendiente"
   | "verificando"
   | "pagada"
-  | "cancelada";
+  | "cancelada"
+  | "anulada";
 
 export type EstadoSri =
   | "sin_enviar"
@@ -42,6 +43,10 @@ export interface IFactura extends Document {
   referenciaPago: string;
   comprobanteUrl: string;
   pagadaEn: Date;
+  /** Anulación interna: libera las cajas para volver a facturarlas. En el SRI se anula aparte. */
+  anuladaMotivo: string;
+  anuladaPor: mongoose.Types.ObjectId | null;
+  anuladaEn: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -77,12 +82,15 @@ const facturaSchema = new Schema<IFactura>(
     contificoResponse: { type: Schema.Types.Mixed, default: {} },
     estado: {
       type: String,
-      enum: ["pendiente", "verificando", "pagada", "cancelada"],
+      enum: ["pendiente", "verificando", "pagada", "cancelada", "anulada"],
       default: "pendiente",
     },
     referenciaPago: { type: String, default: "" },
     comprobanteUrl: { type: String, default: "" },
     pagadaEn: { type: Date, default: null },
+    anuladaMotivo: { type: String, default: "" },
+    anuladaPor: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    anuladaEn: { type: Date, default: null },
   },
   { timestamps: true, versionKey: false }
 );
