@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   emitirFactura: vi.fn(),
   createAndSendNotification: vi.fn(),
   obtenerIvaPorcentaje: vi.fn(),
+  obtenerTarifasBase: vi.fn(),
+  aliadosParaTarifas: vi.fn(),
 }));
 
 vi.mock("../models/index", () => ({
@@ -25,6 +27,12 @@ vi.mock("./contifico.service", () => ({ contificoService: { emitirFactura: mocks
 vi.mock("./configuracion_facturacion.service", () => ({
   IVA_PORCENTAJE_DEFECTO: 15,
   obtenerIvaPorcentaje: mocks.obtenerIvaPorcentaje,
+  obtenerTarifasBase: mocks.obtenerTarifasBase,
+  TARIFAS_BASE_DEFECTO: { fleteLb: 6.5, arancelLb: 1.99 },
+}));
+vi.mock("./aliados.service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./aliados.service")>()),
+  aliadosParaTarifas: mocks.aliadosParaTarifas,
 }));
 vi.mock("./ghl-webhook.service", () => ({ enviarWebhookFactura: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("./notification.service", () => ({ createAndSendNotification: mocks.createAndSendNotification }));
@@ -32,7 +40,10 @@ vi.mock("../config/env", () => ({
   env: { FRONTEND_ORIGIN: ["https://courierboxlogistics.com"], CONTIFICO_PRODUCTO_FLETE: "CATB01", CONTIFICO_PRODUCTO_ARANCEL: "REEMB" },
 }));
 
+import { ALIADOS_DEFECTO } from "./aliados.service";
 import {
+  agruparLineas,
+  calcularTotalesItems,
   cedulaValida,
   completarDatosCliente,
   facturarPaquetes,
@@ -141,6 +152,8 @@ describe("facturarPaquetes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.obtenerIvaPorcentaje.mockResolvedValue(15);
+    mocks.obtenerTarifasBase.mockResolvedValue({ fleteLb: 6.5, arancelLb: 1.99 });
+    mocks.aliadosParaTarifas.mockResolvedValue(ALIADOS_DEFECTO);
     mocks.paquetesFind.mockReturnValue(lean(paquetes));
     mocks.clientesFindById.mockReturnValue(lean(cliente));
     mocks.facturasCreate.mockImplementation(async (doc: any) => ({ _id: new mongoose.Types.ObjectId(), ...doc }));
@@ -259,8 +272,70 @@ describe("facturarPaquetes", () => {
   });
 });
 
+describe("tarifas por aliado", () => {
+  const clienteId = new mongoose.Types.ObjectId();
+  const cliente = { _id: clienteId, nombreOficial: "Diego Reyes", cedulaRuc: "0954227641", email: "d@x.com", telefono: "099", direccion: "Gye", codigoCasillero: "CBX9" };
+  const caja = (wr: string, pesoLb: number, agencia: string) => ({ _id: new mongoose.Types.ObjectId(), wr, pesoLb, agencia, masterClienteId: clienteId, facturaId: null });
+  const gracia = { ...ALIADOS_DEFECTO.find((a) => a.codigo === "GRACIABOX")!, tarifaFleteLb: 3.62 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.obtenerIvaPorcentaje.mockResolvedValue(15);
+    mocks.obtenerTarifasBase.mockResolvedValue({ fleteLb: 6.5, arancelLb: 1.99 });
+    mocks.aliadosParaTarifas.mockResolvedValue(ALIADOS_DEFECTO.map((a) => (a.codigo === "GRACIABOX" ? gracia : a)));
+    mocks.clientesFindById.mockReturnValue(lean(cliente));
+    mocks.facturasCreate.mockImplementation(async (doc: any) => ({ _id: new mongoose.Types.ObjectId(), ...doc }));
+    mocks.paquetesUpdateMany.mockResolvedValue({});
+    mocks.createAndSendNotification.mockResolvedValue({});
+    mocks.emitirFactura.mockResolvedValue({ exito: true, id: "c", numero: "001-001-1", estadoSri: "pendiente", autorizacion: "", urlRide: "", urlXml: "", mensaje: "", raw: {} });
+  });
+
+  it("una caja de Gracia Box sale con su flete especial y el arancel base", async () => {
+    const p = caja("WR1", 10, "GRACIA BOX");
+    mocks.paquetesFind.mockReturnValue(lean([p]));
+    const r = await facturarPaquetes([String(p._id)]);
+    expect(r.exito).toBe(true);
+    expect(mocks.emitirFactura.mock.calls[0][0].lineas).toEqual([
+      { codigoProducto: "CATB01", cantidad: 10, precio: 3.62, porcentajeIva: 15 },
+      { codigoProducto: "REEMB", cantidad: 10, precio: 1.99, porcentajeIva: 0 },
+    ]);
+    expect(mocks.facturasCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFlete: 36.2, totalArancel: 19.9, iva: 5.43, totalGeneral: 61.53 }));
+  });
+
+  it("si se mezclan tarifas, el flete se separa en una línea por precio", async () => {
+    const a = caja("WR1", 2, "GRACIA BOX");
+    const b = caja("WR2", 3, "COURIER BOX");
+    mocks.paquetesFind.mockReturnValue(lean([a, b]));
+    await facturarPaquetes([String(a._id), String(b._id)]);
+    expect(mocks.emitirFactura.mock.calls[0][0].lineas).toEqual([
+      { codigoProducto: "CATB01", cantidad: 2, precio: 3.62, porcentajeIva: 15 },
+      { codigoProducto: "CATB01", cantidad: 3, precio: 6.5, porcentajeIva: 15 },
+      { codigoProducto: "REEMB", cantidad: 5, precio: 1.99, porcentajeIva: 0 },
+    ]);
+  });
+
+  it("la tarifa base configurada reemplaza a la de siempre", async () => {
+    mocks.obtenerTarifasBase.mockResolvedValue({ fleteLb: 7, arancelLb: 2 });
+    const p = caja("WR1", 1, "COURIER BOX");
+    mocks.paquetesFind.mockReturnValue(lean([p]));
+    await facturarPaquetes([String(p._id)]);
+    expect(mocks.emitirFactura.mock.calls[0][0].lineas.map((l: any) => l.precio)).toEqual([7, 2]);
+  });
+
+  it("los totales suman cada grupo redondeado, igual que Contifico", () => {
+    const items = [{ pesoLb: 1.1, fleteLb: 6.5, arancelLb: 1.99 }, { pesoLb: 2.2, fleteLb: 6.5, arancelLb: 1.99 }];
+    expect(agruparLineas(items).flete).toEqual([{ precio: 6.5, libras: 3.3, total: 21.45 }]);
+    expect(calcularTotalesItems(items, 0.15)).toMatchObject({ totalFlete: 21.45, totalArancel: 6.57, totalIva: 3.22, totalGeneral: 31.24 });
+  });
+});
+
 describe("listarFacturables", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.obtenerIvaPorcentaje.mockResolvedValue(15);
+    mocks.obtenerTarifasBase.mockResolvedValue({ fleteLb: 6.5, arancelLb: 1.99 });
+    mocks.aliadosParaTarifas.mockResolvedValue(ALIADOS_DEFECTO);
+  });
 
   it("también encuentra las cajas de un cliente buscando por su casillero", async () => {
     const clienteId = new mongoose.Types.ObjectId();
