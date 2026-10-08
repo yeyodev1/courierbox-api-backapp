@@ -5,11 +5,10 @@ import { enviarWebhookFactura } from "./ghl-webhook.service";
 import { createAndSendNotification } from "./notification.service";
 import { logger } from "../utils/logger";
 import { env } from "../config/env";
-import type { EstadoSri, IFactura } from "../models/factura.model";
-import { IVA_PORCENTAJE_DEFECTO, obtenerIvaPorcentaje } from "./configuracion_facturacion.service";
+import type { EstadoFactura, EstadoSri, IFactura } from "../models/factura.model";
+import { IVA_PORCENTAJE_DEFECTO, obtenerIvaPorcentaje, obtenerTarifasBase, TARIFAS_BASE_DEFECTO } from "./configuracion_facturacion.service";
+import { aliadoDeAgencia, aliadosParaTarifas, type AliadoDatos } from "./aliados.service";
 
-const TARIFA_FLETE_LB = 6.50;
-const TARIFA_ARANCEL_LB = 1.99;
 /** Sólo como respaldo; el vigente sale de la configuración global. */
 const IVA = IVA_PORCENTAJE_DEFECTO / 100;
 
@@ -17,14 +16,8 @@ const IVA = IVA_PORCENTAJE_DEFECTO / 100;
 export const TOPE_CONSUMIDOR_FINAL = 50;
 export const RUC_CONSUMIDOR_FINAL = "9999999999999";
 
-/** Published so the counter screen can show live totals as packages are ticked. */
-export const TARIFAS = {
-  fleteLb: TARIFA_FLETE_LB,
-  arancelLb: TARIFA_ARANCEL_LB,
-  iva: IVA,
-} as const;
-
 export interface Tarifas {
+  /** Tarifa base de Courier Box; los aliados con precio propio la reemplazan. */
   fleteLb: number;
   arancelLb: number;
   /** Fracción (0.15) para las cuentas. */
@@ -33,10 +26,41 @@ export interface Tarifas {
   ivaPorcentaje: number;
 }
 
-/** Las tarifas vigentes: flete y arancel fijos, IVA según la configuración global. */
+/** Las tarifas vigentes: flete y arancel base e IVA, todos de la configuración global. */
 export async function obtenerTarifas(): Promise<Tarifas> {
-  const ivaPorcentaje = await obtenerIvaPorcentaje();
-  return { fleteLb: TARIFA_FLETE_LB, arancelLb: TARIFA_ARANCEL_LB, iva: ivaPorcentaje / 100, ivaPorcentaje };
+  const [ivaPorcentaje, base] = await Promise.all([obtenerIvaPorcentaje(), obtenerTarifasBase()]);
+  return { fleteLb: base.fleteLb, arancelLb: base.arancelLb, iva: ivaPorcentaje / 100, ivaPorcentaje };
+}
+
+/** Lo que se cobra por libra a una caja y por qué (el aliado, si tiene precio propio). */
+export interface TarifaPaquete {
+  fleteLb: number;
+  arancelLb: number;
+  aliado: string;
+  /** true si sale con precio especial del aliado y no con el base. */
+  especial: boolean;
+}
+
+export function tarifaDePaquete(
+  agencia: unknown,
+  base: Pick<Tarifas, "fleteLb" | "arancelLb">,
+  aliados: AliadoDatos[]
+): TarifaPaquete {
+  const al = aliadoDeAgencia(agencia, aliados);
+  const fleteLb = al?.tarifaFleteLb ?? base.fleteLb;
+  const arancelLb = al?.tarifaArancelLb ?? base.arancelLb;
+  return {
+    fleteLb,
+    arancelLb,
+    aliado: al?.nombre ?? "",
+    especial: al?.tarifaFleteLb != null || al?.tarifaArancelLb != null,
+  };
+}
+
+/** Cada caja con su tarifa, según el aliado de su agencia. */
+export async function tarifasDePaquetes<P extends { agencia?: unknown }>(paquetes: P[]) {
+  const [tarifas, aliados] = await Promise.all([obtenerTarifas(), aliadosParaTarifas()]);
+  return { tarifas, conTarifa: paquetes.map((p) => ({ ...p, tarifa: tarifaDePaquete(p.agencia, tarifas, aliados) })) };
 }
 
 export interface TotalesFactura {
@@ -48,16 +72,59 @@ export interface TotalesFactura {
   totalGeneral: number;
 }
 
+export interface ItemTarifado {
+  pesoLb: number;
+  fleteLb: number;
+  arancelLb: number;
+}
+
+const r2 = (n: number) => parseFloat(n.toFixed(2));
+
+/**
+ * Las líneas por libra que van a Contifico: una de flete y una de arancel por
+ * cada precio distinto. Con todas las cajas a la misma tarifa son dos líneas,
+ * como siempre; si se mezcla un aliado con precio especial, se separan.
+ */
+export function agruparLineas(items: ItemTarifado[]) {
+  const sumar = (precioDe: (i: ItemTarifado) => number) => {
+    const grupos = new Map<number, number>();
+    for (const i of items) {
+      const precio = precioDe(i);
+      grupos.set(precio, (grupos.get(precio) ?? 0) + (Number(i.pesoLb) || 0));
+    }
+    return [...grupos].map(([precio, libras]) => ({ precio, libras: r2(libras), total: r2(libras * precio) }));
+  };
+  return { flete: sumar((i) => i.fleteLb), arancel: sumar((i) => i.arancelLb) };
+}
+
 /** Single source of truth for the tariff maths, shared by preview and emission. */
-export function calcularTotales(pesos: number[], iva: number = IVA): TotalesFactura {
-  const pesoTotalLb = pesos.reduce((sum, p) => sum + (Number(p) || 0), 0);
-  const totalFlete = parseFloat((pesoTotalLb * TARIFA_FLETE_LB).toFixed(2));
-  const totalArancel = parseFloat((pesoTotalLb * TARIFA_ARANCEL_LB).toFixed(2));
-  const subtotal = parseFloat((totalFlete + totalArancel).toFixed(2));
+export function calcularTotalesItems(items: ItemTarifado[], iva: number = IVA): TotalesFactura {
+  const pesoTotalLb = items.reduce((sum, i) => sum + (Number(i.pesoLb) || 0), 0);
+  const { flete, arancel } = agruparLineas(items);
+  const totalFlete = r2(flete.reduce((s, l) => s + l.total, 0));
+  const totalArancel = r2(arancel.reduce((s, l) => s + l.total, 0));
+  const subtotal = r2(totalFlete + totalArancel);
   // Only the freight line carries IVA, matching the Contifico item breakdown.
-  const totalIva = parseFloat((totalFlete * iva).toFixed(2));
-  const totalGeneral = parseFloat((subtotal + totalIva).toFixed(2));
+  const totalIva = r2(totalFlete * iva);
+  const totalGeneral = r2(subtotal + totalIva);
   return { pesoTotalLb, totalFlete, totalArancel, subtotal, totalIva, totalGeneral };
+}
+
+/** Todas las cajas a una misma tarifa (la base, si no se indica otra). */
+export function calcularTotales(
+  pesos: number[],
+  iva: number = IVA,
+  tarifa: { fleteLb: number; arancelLb: number } = TARIFAS_BASE_DEFECTO
+): TotalesFactura {
+  return calcularTotalesItems(pesos.map((pesoLb) => ({ pesoLb, ...tarifa })), iva);
+}
+
+/** Totales de una selección con la tarifa de cada caja, para la vista previa del counter. */
+export async function previewTotales(paqueteIds: string[]) {
+  const paquetes = await models.paquetes.find({ _id: { $in: paqueteIds } }).select("pesoLb agencia").lean();
+  const { tarifas, conTarifa } = await tarifasDePaquetes(paquetes);
+  const totales = calcularTotalesItems(conTarifa.map((p) => ({ pesoLb: p.pesoLb || 0, ...p.tarifa })), tarifas.iva);
+  return { totales, tarifas };
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +473,7 @@ export async function listarFacturables(q: string) {
       .sort({ createdAt: -1 })
       .limit(60)
       .lean();
-    return { paquetes, tarifas };
+    return { paquetes: (await tarifasDePaquetes(paquetes)).conTarifa, tarifas };
   }
 
   const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -438,7 +505,7 @@ export async function listarFacturables(q: string) {
     .limit(60)
     .lean();
 
-  return { paquetes, tarifas };
+  return { paquetes: (await tarifasDePaquetes(paquetes)).conTarifa, tarifas };
 }
 
 async function cargarSeleccion(paqueteIds: string[]) {
@@ -454,8 +521,9 @@ async function cargarSeleccion(paqueteIds: string[]) {
   const cliente = masterId ? await models.masterClientes.findById(masterId).lean() : null;
   if (!cliente) return { error: "Cliente no encontrado" as const };
 
-  const tarifas = await obtenerTarifas();
-  return { paquetes, cliente, tarifas, totales: calcularTotales(paquetes.map((p) => p.pesoLb || 0), tarifas.iva) };
+  const { tarifas, conTarifa } = await tarifasDePaquetes(paquetes);
+  const items = conTarifa.map((p) => ({ pesoLb: p.pesoLb || 0, fleteLb: p.tarifa.fleteLb, arancelLb: p.tarifa.arancelLb }));
+  return { paquetes, cliente, tarifas, items, totales: calcularTotalesItems(items, tarifas.iva) };
 }
 
 /** Lo que el counter necesita ver antes de emitir: cliente, totales y qué falta. */
@@ -520,7 +588,7 @@ export async function facturarPaquetes(
 > {
   const sel = await cargarSeleccion(paqueteIds);
   if ("error" in sel) return { exito: false, error: String(sel.error) };
-  const { paquetes, cliente, totales, tarifas } = sel;
+  const { paquetes, cliente, totales, tarifas, items } = sel;
 
   if (paquetes.some((p) => p.facturaId)) {
     return { exito: false, error: "Alguno de esos paquetes ya tiene factura. Actualiza la búsqueda." };
@@ -545,6 +613,7 @@ export async function facturarPaquetes(
   }
 
   const { pesoTotalLb: pesoTotal, totalFlete, totalArancel, totalIva, totalGeneral } = totales;
+  const lineas = agruparLineas(items);
   const referencias = paquetes.map((p) => p.wr || p.sh || p.trackingOriginal).filter(Boolean);
   const descripcion = [
     `${pesoTotal.toFixed(2)} lb · ${paquetes.length} paquete(s)`,
@@ -561,8 +630,8 @@ export async function facturarPaquetes(
       direccion: datos.direccion,
     },
     lineas: [
-      { codigoProducto: env.CONTIFICO_PRODUCTO_FLETE, cantidad: pesoTotal, precio: TARIFA_FLETE_LB, porcentajeIva: tarifas.ivaPorcentaje },
-      { codigoProducto: env.CONTIFICO_PRODUCTO_ARANCEL, cantidad: pesoTotal, precio: TARIFA_ARANCEL_LB, porcentajeIva: 0 },
+      ...lineas.flete.map((l) => ({ codigoProducto: env.CONTIFICO_PRODUCTO_FLETE, cantidad: l.libras, precio: l.precio, porcentajeIva: tarifas.ivaPorcentaje })),
+      ...lineas.arancel.map((l) => ({ codigoProducto: env.CONTIFICO_PRODUCTO_ARANCEL, cantidad: l.libras, precio: l.precio, porcentajeIva: 0 })),
     ],
     descripcion,
   });
@@ -699,4 +768,58 @@ export async function registrarCobroContifico(factura: IFactura): Promise<void> 
     monto: factura.totalGeneral,
     comprobante: factura.referenciaPago,
   });
+}
+
+/** Estados desde los que se puede anular: lo cobrado se devuelve primero, no se anula. */
+const ANULABLES = new Set(["pendiente", "verificando"]);
+
+/**
+ * Anula una factura dentro del sistema y deja sus cajas otra vez pendientes de
+ * facturar, como "Anular" en la plataforma anterior. No toca el SRI: una
+ * factura autorizada se anula en el portal del SRI (o en Contifico), y el
+ * counter lo ve advertido en la pantalla antes de confirmar.
+ */
+export async function anularFactura(
+  facturaId: string,
+  motivo: string,
+  userId?: string
+): Promise<{ exito: true; factura: IFactura; paquetesLiberados: number } | { exito: false; error: string; status: number }> {
+  if (!mongoose.isValidObjectId(facturaId)) return { exito: false, error: "Factura inválida", status: 400 };
+  const razon = String(motivo ?? "").trim();
+  if (razon.length < 5) return { exito: false, error: "Escribe el motivo de la anulación.", status: 400 };
+
+  const factura = await models.facturas.findById(facturaId);
+  if (!factura) return { exito: false, error: "Factura no encontrada", status: 404 };
+  if (factura.estado === "anulada") return { exito: false, error: "Esa factura ya está anulada.", status: 409 };
+  if (!ANULABLES.has(factura.estado)) {
+    return { exito: false, error: "La factura ya está pagada. Registra la devolución del pago antes de anularla.", status: 409 };
+  }
+
+  const entregadas = await models.paquetes.countDocuments({ facturaId: factura._id, estado: "despachado" });
+  if (entregadas > 0) {
+    return { exito: false, error: `${entregadas} caja(s) de esta factura ya se entregaron. Anula primero el retiro en el counter.`, status: 409 };
+  }
+
+  // Condición en el update: si dos personas anulan a la vez, sólo una gana.
+  const anulada = await models.facturas.findOneAndUpdate(
+    { _id: factura._id, estado: { $in: ["pendiente", "verificando"] as EstadoFactura[] } },
+    {
+      $set: {
+        estado: "anulada",
+        anuladaMotivo: razon.slice(0, 300),
+        anuladaPor: userId && mongoose.isValidObjectId(userId) ? new mongoose.Types.ObjectId(userId) : null,
+        anuladaEn: new Date(),
+      },
+    },
+    { new: true }
+  );
+  if (!anulada) return { exito: false, error: "La factura cambió de estado. Actualiza y vuelve a intentar.", status: 409 };
+
+  const liberados = await models.paquetes.updateMany(
+    { facturaId: factura._id },
+    { $set: { estado: "validado", facturaId: null } }
+  );
+
+  logger.info("[facturacion] factura anulada", { factura: anulada.numeroFactura, motivo: razon, paquetes: liberados.modifiedCount });
+  return { exito: true, factura: anulada, paquetesLiberados: liberados.modifiedCount };
 }
