@@ -23,6 +23,7 @@ import { ProductoInventario } from "./producto_inventario.model";
 import { VentaProducto } from "./venta_producto.model";
 import { Configuracion } from "./configuracion.model";
 import { Aliado } from "./aliado.model";
+import { JornadaGerencial } from "./jornada_gerencial.model";
 
 export const models = {
   payments: Payment,
@@ -50,4 +51,5 @@ export const models = {
   ventasProducto: VentaProducto,
   configuraciones: Configuracion,
   aliados: Aliado,
+  jornadasGerenciales: JornadaGerencial,
 };
