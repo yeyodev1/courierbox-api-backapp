@@ -60,6 +60,31 @@ export async function deleteAbono(req: Request, res: Response, next: NextFunctio
   }
 }
 
+export async function getAjustes(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json({ ajustes: await svc.leerAjustes() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function putAjustes(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json({ ajustes: await svc.guardarAjustes(req.body ?? {}, usuario(req)) });
+  } catch (err) {
+    responderError(err, res, next);
+  }
+}
+
+/** Saldos que ya están en la plataforma (facturas, ventas, gestiones), solo lectura. */
+export async function getPlataforma(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.status(200).json({ cuentas: await svc.cuentasDePlataforma() });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getAlertas(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     res.status(200).json({ alertas: await svc.leerAlertas() });
