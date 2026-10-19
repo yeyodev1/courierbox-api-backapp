@@ -33,6 +33,7 @@ import retiroCounterRouter from "./routes/retiro_counter.routes";
 import solicitudCompraRouter from "./routes/solicitud_compra.routes";
 import { paquetesRouter } from "./routes/paquetes.routes";
 import { aliadosRouter } from "./routes/aliados.routes";
+import { gerenciaRouter } from "./routes/gerencia.routes";
 
 export function createApp() {
   const app = express();
@@ -95,6 +96,7 @@ export function createApp() {
   app.use("/api/v1/solicitudes-compra", solicitudCompraRouter);
   app.use("/api/v1/paquetes", paquetesRouter);
   app.use("/api/v1/aliados", aliadosRouter);
+  app.use("/api/v1/gerencia", gerenciaRouter);
   app.use("/api/v1/contactos", contactosRouter);
   app.use("/api/v1/contactos-cb", contactosCbRouter);
   app.use("/api/v1/cuentas-bancarias", cuentasBancariasRouter);
