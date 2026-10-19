@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { env } from "../config/env";
 import { models } from "../models/index";
-import { TIPOS_CUENTA_COBRAR, type ICuentaCobrar, type TipoCuentaCobrar } from "../models/cuenta_cobrar.model";
+import { TIPOS_CUENTA_COBRAR_INICIALES, type ICuentaCobrar } from "../models/cuenta_cobrar.model";
 import { sendResumenCobros, type FilaResumenCobro } from "./email.service";
 
 export type EstadoCuentaCobrar = "pendiente" | "abonado" | "atrasado" | "pagado";
@@ -9,6 +9,7 @@ export type EstadoCuentaCobrar = "pendiente" | "abonado" | "atrasado" | "pagado"
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const CLAVE_ALERTAS = "cuentasCobrar.alertas";
 const CLAVE_ULTIMO_RESUMEN = "cuentasCobrar.ultimoResumen";
+const CLAVE_TIPOS = "cuentasCobrar.tipos";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 class ErrorValidacion extends Error {
@@ -64,9 +65,12 @@ function monto(v: unknown, campo: string, minimo = 0) {
   return redondear(n);
 }
 
-function leerCampos(body: Record<string, unknown>) {
+async function leerCampos(body: Record<string, unknown>) {
   const tipo = body.tipo;
-  if (tipo !== undefined && !TIPOS_CUENTA_COBRAR.includes(tipo as TipoCuentaCobrar)) throw falla("Tipo inválido");
+  if (tipo !== undefined) {
+    const { tipos } = await leerAjustes();
+    if (typeof tipo !== "string" || !tipos.some((t) => t.valor === tipo)) throw falla("Tipo inválido");
+  }
   const campos: Record<string, unknown> = {
     cliente: texto(body.cliente, "Cliente"),
     tipo,
@@ -92,7 +96,7 @@ export async function listarCuentas() {
 }
 
 export async function crearCuenta(body: Record<string, unknown>, usuario: string) {
-  const campos = leerCampos(body);
+  const campos = await leerCampos(body);
   if (!campos.cliente) throw falla("Escribe el cliente");
   if (campos.monto === undefined || (campos.monto as number) <= 0) throw falla("El monto debe ser mayor a 0");
   const c = await models.cuentasCobrar.create({ ...campos, creadoPor: usuario, actualizadoPor: usuario });
@@ -101,7 +105,7 @@ export async function crearCuenta(body: Record<string, unknown>, usuario: string
 
 export async function actualizarCuenta(id: string, body: Record<string, unknown>, usuario: string) {
   const c = await buscar(id);
-  const campos = leerCampos(body);
+  const campos = await leerCampos(body);
   if ("cliente" in campos && !campos.cliente) throw falla("El cliente no puede quedar vacío");
   if ("monto" in campos && (campos.monto as number) <= 0) throw falla("El monto debe ser mayor a 0");
   c.set({ ...campos, actualizadoPor: usuario });
@@ -140,6 +144,133 @@ export async function eliminarAbono(id: string, abonoId: string, usuario: string
   c.actualizadoPor = usuario;
   await c.save();
   return serializar(c);
+}
+
+// ——— Ajustes de la libreta (tipos editables) ———
+
+export interface TipoCuenta {
+  valor: string;
+  etiqueta: string;
+}
+
+export async function leerAjustes(): Promise<{ tipos: TipoCuenta[] }> {
+  const doc = await models.configuraciones.findOne({ clave: CLAVE_TIPOS }).lean();
+  const tipos = Array.isArray(doc?.valor) && doc.valor.length ? (doc.valor as TipoCuenta[]) : TIPOS_CUENTA_COBRAR_INICIALES;
+  return { tipos };
+}
+
+/** Clave estable a partir de la etiqueta ("Gestión de compra" → "gestion-de-compra"). */
+const claveDe = (etiqueta: string) =>
+  etiqueta
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+
+/**
+ * Guarda la lista de tipos. Los que ya existían conservan su clave aunque se
+ * renombren, así las cuentas viejas siguen apuntando al mismo tipo.
+ */
+export async function guardarAjustes(body: Record<string, unknown>, usuario: string) {
+  if (!Array.isArray(body.tipos)) throw falla("Tipos inválidos");
+  const tipos: TipoCuenta[] = [];
+  for (const t of body.tipos as Record<string, unknown>[]) {
+    const etiqueta = typeof t?.etiqueta === "string" ? t.etiqueta.trim() : "";
+    if (!etiqueta) throw falla("Cada tipo necesita un nombre");
+    if (etiqueta.length > 40) throw falla(`"${etiqueta}" es demasiado largo`);
+    const valor = typeof t.valor === "string" && t.valor.trim() ? t.valor.trim() : claveDe(etiqueta);
+    if (!valor) throw falla(`"${etiqueta}" no es un nombre válido`);
+    if (tipos.some((x) => x.valor === valor || x.etiqueta.toLowerCase() === etiqueta.toLowerCase())) throw falla(`"${etiqueta}" está repetido`);
+    tipos.push({ valor, etiqueta });
+  }
+  if (!tipos.length) throw falla("Deja al menos un tipo");
+  if (tipos.length > 20) throw falla("Máximo 20 tipos");
+  await models.configuraciones.updateOne({ clave: CLAVE_TIPOS }, { $set: { valor: tipos, actualizadoPor: usuario } }, { upsert: true });
+  return { tipos };
+}
+
+// ——— Saldos de la plataforma operativa (solo lectura) ———
+
+export interface CuentaPlataforma {
+  id: string;
+  origen: "factura" | "venta" | "gestion";
+  cliente: string;
+  tipo: string;
+  referencia: string;
+  saldo: number;
+  total: number;
+  fecha: string;
+  asesor: string;
+}
+
+const isoEcuador = (d: Date | string | undefined) => (d ? hoyEcuador(new Date(d)) : "");
+
+/**
+ * Lo que la plataforma ya tiene por cobrar: facturas sin pagar, ventas de
+ * productos con saldo y gestiones de compra con saldo. Gerencia lo ve aparte
+ * y solo si quiere; no se mezcla con la libreta ni se puede editar desde ahí.
+ */
+export async function cuentasDePlataforma(): Promise<CuentaPlataforma[]> {
+  const [facturas, ventas, gestiones] = await Promise.all([
+    models.facturas
+      .find({ estado: { $in: ["pendiente", "verificando"] } }, { numeroFactura: 1, facturadoA: 1, totalGeneral: 1, createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean(),
+    models.ventasProducto
+      .find({ saldo: { $gt: 0 } }, { clienteNombre: 1, productoNombre: 1, saldo: 1, total: 1, createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean(),
+    models.gestionesCompra
+      .find({ estado: { $in: ["activa", "completado"] }, estadoPago: { $nin: ["confirmado", "reembolsado"] } }, { contactoId: 1, asesorId: 1, valorTotal: 1, valorPagado: 1, paginaCompra: 1, createdAt: 1 })
+      .populate("contactoId", "nombre")
+      .populate("asesorId", "name")
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean(),
+  ]);
+
+  const filas: CuentaPlataforma[] = [
+    ...facturas.map((f: any) => ({
+      id: String(f._id),
+      origen: "factura" as const,
+      cliente: f.facturadoA?.razonSocial || "Sin nombre",
+      tipo: "courier",
+      referencia: f.numeroFactura ? `Factura ${f.numeroFactura}` : "Factura",
+      saldo: redondear(f.totalGeneral || 0),
+      total: redondear(f.totalGeneral || 0),
+      fecha: isoEcuador(f.createdAt),
+      asesor: "",
+    })),
+    ...ventas.map((v: any) => ({
+      id: String(v._id),
+      origen: "venta" as const,
+      cliente: v.clienteNombre || "Sin nombre",
+      tipo: "venta",
+      referencia: v.productoNombre || "Venta",
+      saldo: redondear(v.saldo || 0),
+      total: redondear(v.total || 0),
+      fecha: isoEcuador(v.createdAt),
+      asesor: "",
+    })),
+    ...gestiones
+      .map((g: any) => ({
+        id: String(g._id),
+        origen: "gestion" as const,
+        cliente: g.contactoId?.nombre || "Sin nombre",
+        tipo: "gdc",
+        referencia: g.paginaCompra ? `Gestión · ${String(g.paginaCompra).slice(0, 60)}` : "Gestión de compra",
+        saldo: redondear(Math.max(0, (g.valorTotal || 0) - (g.valorPagado || 0))),
+        total: redondear(g.valorTotal || 0),
+        fecha: isoEcuador(g.createdAt),
+        asesor: g.asesorId?.name || "",
+      }))
+      .filter((g) => g.saldo > 0),
+  ];
+  return filas.filter((f) => f.saldo > 0);
 }
 
 // ——— Alertas por correo ———
@@ -218,10 +349,16 @@ export async function enviarResumen(opciones: { forzar?: boolean } = {}) {
     if (ultimo?.valor === hoy) return { enviado: false, motivo: "Ya se envió hoy" };
   }
   const resumen = armarResumen(await models.cuentasCobrar.find().lean(), hoy);
+  // El correo muestra el nombre del tipo, no su clave interna.
+  const { tipos } = await leerAjustes();
+  const etiqueta = (f: FilaResumenCobro) => ({ ...f, tipo: tipos.find((t) => t.valor === f.tipo)?.etiqueta ?? f.tipo });
+  resumen.cobrarHoy = resumen.cobrarHoy.map(etiqueta);
+  resumen.vencenHoy = resumen.vencenHoy.map(etiqueta);
+  resumen.atrasadas = resumen.atrasadas.map(etiqueta);
   const hayAlgo = resumen.cobrarHoy.length + resumen.vencenHoy.length + resumen.atrasadas.length > 0;
   if (!hayAlgo && !opciones.forzar) return { enviado: false, motivo: "Nada que cobrar hoy" };
 
-  const r = await sendResumenCobros({ to: config.destinatarios, resumen, url: `${frontUrl()}/admin/cuentas-por-cobrar` });
+  const r = await sendResumenCobros({ to: config.destinatarios, resumen, url: `${frontUrl()}/cuentas` });
   if (!r.success) throw falla(`No se pudo enviar el correo: ${r.error}`, 502);
   if (!opciones.forzar) {
     await models.configuraciones.updateOne({ clave: CLAVE_ULTIMO_RESUMEN }, { $set: { valor: hoy, actualizadoPor: "cron" } }, { upsert: true });
@@ -234,6 +371,5 @@ export async function enviarResumen(opciones: { forzar?: boolean } = {}) {
 }
 
 function frontUrl() {
-  const prod = env.FRONTEND_ORIGIN.find((o) => /courierboxlogistics\.com/.test(o));
-  return (prod || "https://courierboxlogistics.com").replace(/\/+$/, "");
+  return env.GERENCIA_URL.replace(/\/+$/, "");
 }
