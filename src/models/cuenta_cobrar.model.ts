@@ -1,7 +1,12 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 
-export const TIPOS_CUENTA_COBRAR = ["courier", "venta", "gdc", "otros"] as const;
-export type TipoCuentaCobrar = (typeof TIPOS_CUENTA_COBRAR)[number];
+/** Tipos con los que arranca la libreta; gerencia puede cambiarlos (Configuracion `cuentasCobrar.tipos`). */
+export const TIPOS_CUENTA_COBRAR_INICIALES = [
+  { valor: "courier", etiqueta: "Courier" },
+  { valor: "venta", etiqueta: "Venta" },
+  { valor: "gdc", etiqueta: "GDC" },
+  { valor: "otros", etiqueta: "Otros" },
+];
 
 export interface IAbonoCuentaCobrar {
   _id: Types.ObjectId;
@@ -21,7 +26,8 @@ export interface IAbonoCuentaCobrar {
  */
 export interface ICuentaCobrar extends Document {
   cliente: string;
-  tipo: TipoCuentaCobrar;
+  /** Clave de uno de los tipos configurados. */
+  tipo: string;
   monto: number;
   /** Cuándo debía pagar el cliente (YYYY-MM-DD). Pasada y con saldo = atrasada. */
   fechaPago: string;
@@ -51,7 +57,7 @@ const abonoSchema = new Schema<IAbonoCuentaCobrar>(
 const cuentaCobrarSchema = new Schema<ICuentaCobrar>(
   {
     cliente: { type: String, required: true, trim: true },
-    tipo: { type: String, enum: TIPOS_CUENTA_COBRAR, default: "courier" },
+    tipo: { type: String, default: "courier", trim: true },
     monto: { type: Number, required: true, min: 0 },
     fechaPago: { type: String, default: "", validate: (v: string) => !v || FECHA.test(v) },
     fechaCobro: { type: String, default: "", validate: (v: string) => !v || FECHA.test(v) },
