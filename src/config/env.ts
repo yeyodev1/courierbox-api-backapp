@@ -68,6 +68,8 @@ const schema = z.object({
 
   // --- Tareas programadas de Vercel (firma de las llamadas) ---
   CRON_SECRET: z.string().default(""),
+  /** Dónde vive el módulo de gerencia (enlace del correo de cobros). */
+  GERENCIA_URL: z.string().url().default("https://gerenciacourierbox.vercel.app"),
 });
 
 const parsed = schema.safeParse(process.env);
