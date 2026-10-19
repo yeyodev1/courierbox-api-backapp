@@ -65,6 +65,9 @@ const schema = z.object({
   // --- Resend Email ---
   RESEND_API_KEY: z.string().default(""),
   EMAIL_FROM: z.string().email().default("courierboxlogistics@bakano.ec"),
+
+  // --- Tareas programadas de Vercel (firma de las llamadas) ---
+  CRON_SECRET: z.string().default(""),
 });
 
 const parsed = schema.safeParse(process.env);
