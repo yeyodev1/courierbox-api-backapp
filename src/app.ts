@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { ensureDb } from "./db/mongo";
 import helmet from "helmet";
 import morgan from "morgan";
 import http from "http";
@@ -67,6 +68,19 @@ export function createApp() {
     })
   );
   app.use(express.json({ limit: "1mb" }));
+
+  // Toda petición espera a que Mongo esté listo. Si no hay base de datos, un
+  // 503 con CORS (va después de cors) en vez de que se caiga la instancia.
+  if (env.NODE_ENV !== "test") {
+    app.use(async (_req, res, next) => {
+      try {
+        await ensureDb();
+        next();
+      } catch {
+        res.status(503).json({ error: "El servidor se está conectando a la base de datos. Intenta de nuevo en unos segundos." });
+      }
+    });
+  }
   app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
   app.get("/", (_req, res) =>
