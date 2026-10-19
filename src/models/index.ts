@@ -24,6 +24,7 @@ import { VentaProducto } from "./venta_producto.model";
 import { Configuracion } from "./configuracion.model";
 import { Aliado } from "./aliado.model";
 import { JornadaGerencial } from "./jornada_gerencial.model";
+import { CuentaCobrar } from "./cuenta_cobrar.model";
 
 export const models = {
   payments: Payment,
@@ -52,4 +53,5 @@ export const models = {
   configuraciones: Configuracion,
   aliados: Aliado,
   jornadasGerenciales: JornadaGerencial,
+  cuentasCobrar: CuentaCobrar,
 };
