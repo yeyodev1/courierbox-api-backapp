@@ -929,3 +929,72 @@ export async function sendVentaProductoCliente(
     return { success: false, error: emailError(err) };
   }
 }
+
+// ——— Cuentas por cobrar general ———
+
+export interface FilaResumenCobro {
+  cliente: string;
+  tipo: string;
+  asesor: string;
+  saldo: number;
+  fechaPago: string;
+  fechaCobro: string;
+}
+
+const TIPO_COBRO: Record<string, string> = { courier: "Courier", venta: "Venta", gdc: "GDC", otros: "Otros" };
+
+function fechaCorta(iso: string): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function tablaCobros(titulo: string, color: string, filas: FilaResumenCobro[]): string {
+  if (!filas.length) return "";
+  const money = (n: number) => `$${(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const rows = filas
+    .map(
+      (f, i) =>
+        `<tr style="background:${i % 2 ? "#202020" : "#1a1a1a"}"><td style="padding:10px 12px;color:#fff;font-weight:bold">${escapeEmailHtml(f.cliente)}<div style="color:#999;font-weight:normal;font-size:12px">${escapeEmailHtml(TIPO_COBRO[f.tipo] ?? f.tipo)}${f.asesor ? ` · ${escapeEmailHtml(f.asesor)}` : ""}</div></td><td style="padding:10px 12px;color:#bbb;font-size:13px;white-space:nowrap">Vence ${fechaCorta(f.fechaPago)}</td><td style="padding:10px 12px;color:#fff;text-align:right;font-weight:bold;white-space:nowrap">${money(f.saldo)}</td></tr>`
+    )
+    .join("");
+  const total = filas.reduce((s, f) => s + f.saldo, 0);
+  return `<h2 style="color:${color};font-size:16px;margin:24px 0 8px">${escapeEmailHtml(titulo)} (${filas.length})</h2><table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden">${rows}<tr><td colspan="2" style="padding:10px 12px;color:#999">Total</td><td style="padding:10px 12px;color:${color};text-align:right;font-weight:bold">${money(total)}</td></tr></table>`;
+}
+
+/** Resumen diario de cuentas por cobrar general para gerencia. */
+export async function sendResumenCobros(params: {
+  to: string[];
+  url: string;
+  resumen: {
+    hoy: string;
+    cobrarHoy: FilaResumenCobro[];
+    vencenHoy: FilaResumenCobro[];
+    atrasadas: FilaResumenCobro[];
+    totalPendiente: number;
+    totalAtrasado: number;
+  };
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const r = params.resumen;
+    const money = (n: number) => `$${(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const url = safeEmailUrl(params.url);
+    const cuantas = r.cobrarHoy.length + r.vencenHoy.length;
+    const subject = cuantas
+      ? `Cobros de hoy: ${cuantas} cuenta${cuantas > 1 ? "s" : ""} · ${money(r.totalAtrasado)} atrasado`
+      : `Cuentas por cobrar: ${money(r.totalAtrasado)} atrasado`;
+    const vacio = !r.cobrarHoy.length && !r.vencenHoy.length && !r.atrasadas.length;
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto"><div style="background:#f57c00;padding:20px 24px;border-radius:12px 12px 0 0"><h1 style="color:#fff;margin:0;font-size:20px">Cuentas por cobrar · ${fechaCorta(r.hoy)}</h1></div><div style="background:#141414;color:#e0e0e0;padding:24px;border-radius:0 0 12px 12px"><table style="width:100%;border-collapse:collapse"><tr><td style="padding:12px;background:#1f1f1f;border-radius:8px"><div style="color:#999;font-size:12px">POR COBRAR</div><div style="color:#fff;font-size:22px;font-weight:bold">${money(r.totalPendiente)}</div></td><td style="width:12px"></td><td style="padding:12px;background:#2a1414;border-radius:8px"><div style="color:#ff8a8a;font-size:12px">ATRASADO</div><div style="color:#ff6b6b;font-size:22px;font-weight:bold">${money(r.totalAtrasado)}</div></td></tr></table>${tablaCobros("Cobrar hoy", "#f57c00", r.cobrarHoy)}${tablaCobros("Vencen hoy", "#ffb347", r.vencenHoy)}${tablaCobros("Atrasadas", "#ff6b6b", r.atrasadas)}${vacio ? '<p style="margin:24px 0 0;color:#bbb">No hay cobros para hoy ni cuentas atrasadas.</p>' : ""}<p style="text-align:center;margin:28px 0 4px"><a href="${url}" style="background:#f57c00;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Abrir cuentas por cobrar</a></p></div></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}
