@@ -103,3 +103,30 @@ export async function deleteJornada(req: Request, res: Response, next: NextFunct
     next(err);
   }
 }
+
+const CLAVE_PLANTILLA = "gerencia.plantilla";
+
+/** La plantilla con la que arrancan las jornadas nuevas; null = la del documento original. */
+export async function getPlantilla(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const doc = await models.configuraciones.findOne({ clave: CLAVE_PLANTILLA }).lean();
+    res.status(200).json({ plantilla: doc?.valor ?? null, actualizadoPor: doc?.actualizadoPor ?? "", actualizadaEn: doc?.updatedAt ?? null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function putPlantilla(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { plantilla } = req.body ?? {};
+    if (plantilla !== null && !esObjeto(plantilla)) return void res.status(400).json({ error: "Plantilla inválida" });
+    await models.configuraciones.updateOne(
+      { clave: CLAVE_PLANTILLA },
+      { $set: { valor: plantilla, actualizadoPor: usuario(req) } },
+      { upsert: true }
+    );
+    res.status(200).json({ plantilla });
+  } catch (err) {
+    next(err);
+  }
+}
