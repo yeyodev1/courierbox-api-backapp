@@ -11,5 +11,11 @@
       "source": "/(.*)",
       "destination": "src/index.ts"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/cuentas-cobrar/cron/recordatorios",
+      "schedule": "0 13 * * *"
+    }
   ]
 }
