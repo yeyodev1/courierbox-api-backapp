@@ -25,6 +25,7 @@ import { Configuracion } from "./configuracion.model";
 import { Aliado } from "./aliado.model";
 import { JornadaGerencial } from "./jornada_gerencial.model";
 import { CuentaCobrar } from "./cuenta_cobrar.model";
+import { ApunteAsistencia, ClienteAsistencia, PendienteAsistencia, RecordatorioGerencia } from "./asistencia.model";
 
 export const models = {
   payments: Payment,
@@ -54,4 +55,8 @@ export const models = {
   aliados: Aliado,
   jornadasGerenciales: JornadaGerencial,
   cuentasCobrar: CuentaCobrar,
+  pendientesAsistencia: PendienteAsistencia,
+  clientesAsistencia: ClienteAsistencia,
+  apuntesAsistencia: ApunteAsistencia,
+  recordatoriosGerencia: RecordatorioGerencia,
 };

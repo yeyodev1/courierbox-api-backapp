@@ -1,16 +1,25 @@
 import mongoose from "mongoose";
 import { env } from "../config/env";
 import { models } from "../models/index";
-import { TIPOS_CUENTA_COBRAR_INICIALES, type ICuentaCobrar } from "../models/cuenta_cobrar.model";
+import { TIPOS_CUENTA_COBRAR_INICIALES, type AmbitoCuentaCobrar, type ICuentaCobrar } from "../models/cuenta_cobrar.model";
 import { sendResumenCobros, type FilaResumenCobro } from "./email.service";
 
 export type EstadoCuentaCobrar = "pendiente" | "abonado" | "atrasado" | "pagado";
+export type { AmbitoCuentaCobrar };
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const CLAVE_ALERTAS = "cuentasCobrar.alertas";
 const CLAVE_ULTIMO_RESUMEN = "cuentasCobrar.ultimoResumen";
 const CLAVE_TIPOS = "cuentasCobrar.tipos";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** La libreta de la asistente vive en la misma colección, separada por `ambito`. */
+const filtroAmbito = (ambito: AmbitoCuentaCobrar) =>
+  ambito === "asistencia" ? { ambito: "asistencia" as const } : { ambito: { $ne: "asistencia" as const } };
+
+/** Los tipos de la asistente se configuran aparte de los de gerencia. */
+const claveTipos = (ambito: AmbitoCuentaCobrar) =>
+  ambito === "asistencia" ? "asistencia.cuentasCobrar.tipos" : CLAVE_TIPOS;
 
 class ErrorValidacion extends Error {
   status = 400;
@@ -65,10 +74,10 @@ function monto(v: unknown, campo: string, minimo = 0) {
   return redondear(n);
 }
 
-async function leerCampos(body: Record<string, unknown>) {
+async function leerCampos(body: Record<string, unknown>, ambito: AmbitoCuentaCobrar) {
   const tipo = body.tipo;
   if (tipo !== undefined) {
-    const { tipos } = await leerAjustes();
+    const { tipos } = await leerAjustes(ambito);
     if (typeof tipo !== "string" || !tipos.some((t) => t.valor === tipo)) throw falla("Tipo inválido");
   }
   const campos: Record<string, unknown> = {
@@ -83,29 +92,29 @@ async function leerCampos(body: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(campos).filter(([, v]) => v !== undefined));
 }
 
-async function buscar(id: string) {
+async function buscar(id: string, ambito: AmbitoCuentaCobrar) {
   if (!mongoose.isValidObjectId(id)) throw falla("Cuenta no encontrada", 404);
-  const c = await models.cuentasCobrar.findById(id);
+  const c = await models.cuentasCobrar.findOne({ _id: id, ...filtroAmbito(ambito) });
   if (!c) throw falla("Cuenta no encontrada", 404);
   return c;
 }
 
-export async function listarCuentas() {
-  const docs = await models.cuentasCobrar.find().sort({ createdAt: -1 }).lean();
+export async function listarCuentas(ambito: AmbitoCuentaCobrar = "gerencia") {
+  const docs = await models.cuentasCobrar.find(filtroAmbito(ambito)).sort({ createdAt: -1 }).lean();
   return docs.map(serializar);
 }
 
-export async function crearCuenta(body: Record<string, unknown>, usuario: string) {
-  const campos = await leerCampos(body);
+export async function crearCuenta(body: Record<string, unknown>, usuario: string, ambito: AmbitoCuentaCobrar = "gerencia") {
+  const campos = await leerCampos(body, ambito);
   if (!campos.cliente) throw falla("Escribe el cliente");
   if (campos.monto === undefined || (campos.monto as number) <= 0) throw falla("El monto debe ser mayor a 0");
-  const c = await models.cuentasCobrar.create({ ...campos, creadoPor: usuario, actualizadoPor: usuario });
+  const c = await models.cuentasCobrar.create({ ...campos, ambito, creadoPor: usuario, actualizadoPor: usuario });
   return serializar(c);
 }
 
-export async function actualizarCuenta(id: string, body: Record<string, unknown>, usuario: string) {
-  const c = await buscar(id);
-  const campos = await leerCampos(body);
+export async function actualizarCuenta(id: string, body: Record<string, unknown>, usuario: string, ambito: AmbitoCuentaCobrar = "gerencia") {
+  const c = await buscar(id, ambito);
+  const campos = await leerCampos(body, ambito);
   if ("cliente" in campos && !campos.cliente) throw falla("El cliente no puede quedar vacío");
   if ("monto" in campos && (campos.monto as number) <= 0) throw falla("El monto debe ser mayor a 0");
   c.set({ ...campos, actualizadoPor: usuario });
@@ -113,13 +122,13 @@ export async function actualizarCuenta(id: string, body: Record<string, unknown>
   return serializar(c);
 }
 
-export async function eliminarCuenta(id: string) {
-  const c = await buscar(id);
+export async function eliminarCuenta(id: string, ambito: AmbitoCuentaCobrar = "gerencia") {
+  const c = await buscar(id, ambito);
   await c.deleteOne();
 }
 
-export async function registrarAbono(id: string, body: Record<string, unknown>, usuario: string) {
-  const c = await buscar(id);
+export async function registrarAbono(id: string, body: Record<string, unknown>, usuario: string, ambito: AmbitoCuentaCobrar = "gerencia") {
+  const c = await buscar(id, ambito);
   const valor = monto(body.monto, "Monto del abono", 0.01);
   if (valor === undefined) throw falla("Escribe el monto del abono");
   const { saldo } = calcularEstado(c);
@@ -136,8 +145,8 @@ export async function registrarAbono(id: string, body: Record<string, unknown>, 
   return serializar(c);
 }
 
-export async function eliminarAbono(id: string, abonoId: string, usuario: string) {
-  const c = await buscar(id);
+export async function eliminarAbono(id: string, abonoId: string, usuario: string, ambito: AmbitoCuentaCobrar = "gerencia") {
+  const c = await buscar(id, ambito);
   const abono = c.abonos.id(abonoId);
   if (!abono) throw falla("Abono no encontrado", 404);
   abono.deleteOne();
@@ -153,8 +162,8 @@ export interface TipoCuenta {
   etiqueta: string;
 }
 
-export async function leerAjustes(): Promise<{ tipos: TipoCuenta[] }> {
-  const doc = await models.configuraciones.findOne({ clave: CLAVE_TIPOS }).lean();
+export async function leerAjustes(ambito: AmbitoCuentaCobrar = "gerencia"): Promise<{ tipos: TipoCuenta[] }> {
+  const doc = await models.configuraciones.findOne({ clave: claveTipos(ambito) }).lean();
   const tipos = Array.isArray(doc?.valor) && doc.valor.length ? (doc.valor as TipoCuenta[]) : TIPOS_CUENTA_COBRAR_INICIALES;
   return { tipos };
 }
@@ -173,7 +182,7 @@ const claveDe = (etiqueta: string) =>
  * Guarda la lista de tipos. Los que ya existían conservan su clave aunque se
  * renombren, así las cuentas viejas siguen apuntando al mismo tipo.
  */
-export async function guardarAjustes(body: Record<string, unknown>, usuario: string) {
+export async function guardarAjustes(body: Record<string, unknown>, usuario: string, ambito: AmbitoCuentaCobrar = "gerencia") {
   if (!Array.isArray(body.tipos)) throw falla("Tipos inválidos");
   const tipos: TipoCuenta[] = [];
   for (const t of body.tipos as Record<string, unknown>[]) {
@@ -187,7 +196,7 @@ export async function guardarAjustes(body: Record<string, unknown>, usuario: str
   }
   if (!tipos.length) throw falla("Deja al menos un tipo");
   if (tipos.length > 20) throw falla("Máximo 20 tipos");
-  await models.configuraciones.updateOne({ clave: CLAVE_TIPOS }, { $set: { valor: tipos, actualizadoPor: usuario } }, { upsert: true });
+  await models.configuraciones.updateOne({ clave: claveTipos(ambito) }, { $set: { valor: tipos, actualizadoPor: usuario } }, { upsert: true });
   return { tipos };
 }
 
@@ -348,7 +357,8 @@ export async function enviarResumen(opciones: { forzar?: boolean } = {}) {
     const ultimo = await models.configuraciones.findOne({ clave: CLAVE_ULTIMO_RESUMEN }).lean();
     if (ultimo?.valor === hoy) return { enviado: false, motivo: "Ya se envió hoy" };
   }
-  const resumen = armarResumen(await models.cuentasCobrar.find().lean(), hoy);
+  // Solo la libreta de gerencia: la de la asistente tiene su propio resumen.
+  const resumen = armarResumen(await models.cuentasCobrar.find(filtroAmbito("gerencia")).lean(), hoy);
   // El correo muestra el nombre del tipo, no su clave interna.
   const { tipos } = await leerAjustes();
   const etiqueta = (f: FilaResumenCobro) => ({ ...f, tipo: tipos.find((t) => t.valor === f.tipo)?.etiqueta ?? f.tipo });

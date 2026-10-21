@@ -29,6 +29,8 @@ const schema = z.object({
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(1),
   SUPERADMIN_EMAIL: z.string().email().default("ougarte@courierboxlogistics.com"),
+  /** La asistente de gerencia: destinataria por defecto de su resumen diario. */
+  ASISTENTE_EMAIL: z.string().email().default("asistente@courierboxlogistics.com"),
   SUPERADMIN_PASSWORD: z.string().min(1).default("123456789"),
   PAYPHONE_STORE_ID: z.string().min(1),
   PAYPHONE_TOKEN: z.string().min(1),

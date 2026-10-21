@@ -998,3 +998,93 @@ export async function sendResumenCobros(params: {
     return { success: false, error: emailError(err) };
   }
 }
+
+// ——— Módulo de asistencia ———
+
+export interface FilaResumenPendiente {
+  titulo: string;
+  detalle: string;
+  fechaEjecucion: string;
+}
+
+function tablaPendientes(titulo: string, color: string, filas: FilaResumenPendiente[]): string {
+  if (!filas.length) return "";
+  const rows = filas
+    .map(
+      (f, i) =>
+        `<tr style="background:${i % 2 ? "#202020" : "#1a1a1a"}"><td style="padding:10px 12px;color:#fff;font-weight:bold">${escapeEmailHtml(f.titulo)}${f.detalle ? `<div style="color:#999;font-weight:normal;font-size:12px">${escapeEmailHtml(f.detalle)}</div>` : ""}</td><td style="padding:10px 12px;color:#bbb;font-size:13px;text-align:right;white-space:nowrap">${f.fechaEjecucion ? `Para ${fechaCorta(f.fechaEjecucion)}` : "Sin fecha"}</td></tr>`
+    )
+    .join("");
+  return `<h2 style="color:${color};font-size:16px;margin:24px 0 8px">${escapeEmailHtml(titulo)} (${filas.length})</h2><table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden">${rows}</table>`;
+}
+
+/** Resumen diario de la asistente: sus pendientes del día y sus cobros. */
+export async function sendResumenAsistencia(params: {
+  to: string[];
+  url: string;
+  resumen: {
+    hoy: string;
+    pendientesHoy: FilaResumenPendiente[];
+    pendientesAtrasados: FilaResumenPendiente[];
+    cobrarHoy: FilaResumenCobro[];
+    vencenHoy: FilaResumenCobro[];
+    atrasadas: FilaResumenCobro[];
+    totalPendiente: number;
+    totalAtrasado: number;
+  };
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const r = params.resumen;
+    const money = (n: number) => `$${(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const url = safeEmailUrl(params.url);
+    const tareas = r.pendientesHoy.length + r.pendientesAtrasados.length;
+    const cobros = r.cobrarHoy.length + r.vencenHoy.length + r.atrasadas.length;
+    const subject = tareas || cobros ? `Tu día: ${tareas} pendiente${tareas === 1 ? "" : "s"} · ${cobros} cobro${cobros === 1 ? "" : "s"}` : "Tu día: sin pendientes ni cobros";
+    const vacio = !tareas && !cobros;
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto"><div style="background:#f57c00;padding:20px 24px;border-radius:12px 12px 0 0"><h1 style="color:#fff;margin:0;font-size:20px">Tu día en Courier Box · ${fechaCorta(r.hoy)}</h1></div><div style="background:#141414;color:#e0e0e0;padding:24px;border-radius:0 0 12px 12px">${tablaPendientes("Pendientes de hoy", "#f57c00", r.pendientesHoy)}${tablaPendientes("Pendientes atrasados", "#ff6b6b", r.pendientesAtrasados)}${cobros ? `<table style="width:100%;border-collapse:collapse;margin-top:24px"><tr><td style="padding:12px;background:#1f1f1f;border-radius:8px"><div style="color:#999;font-size:12px">POR COBRAR</div><div style="color:#fff;font-size:22px;font-weight:bold">${money(r.totalPendiente)}</div></td><td style="width:12px"></td><td style="padding:12px;background:#2a1414;border-radius:8px"><div style="color:#ff8a8a;font-size:12px">ATRASADO</div><div style="color:#ff6b6b;font-size:22px;font-weight:bold">${money(r.totalAtrasado)}</div></td></tr></table>` : ""}${tablaCobros("Cobrar hoy", "#f57c00", r.cobrarHoy)}${tablaCobros("Vencen hoy", "#ffb347", r.vencenHoy)}${tablaCobros("Atrasadas", "#ff6b6b", r.atrasadas)}${vacio ? '<p style="margin:24px 0 0;color:#bbb">No tienes pendientes ni cobros para hoy. ✓</p>' : ""}<p style="text-align:center;margin:28px 0 4px"><a href="${url}" style="background:#f57c00;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Abrir mis pendientes</a></p></div></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}
+
+/** Recordatorios que la asistente le deja a gerencia (Oscar). */
+export async function sendRecordatoriosGerencia(params: {
+  to: string[];
+  url: string;
+  de: string;
+  recordatorios: { mensaje: string; fecha: string }[];
+}): Promise<EmailDeliveryResult> {
+  const client = getClient();
+  if (!client) return { success: false, error: "RESEND_API_KEY no configurado" };
+  try {
+    const url = safeEmailUrl(params.url);
+    const n = params.recordatorios.length;
+    const primero = params.recordatorios[0]?.mensaje ?? "";
+    const subject = n === 1 ? `Recordatorio de tu asistente: ${primero.slice(0, 80)}` : `Tu asistente te dejó ${n} recordatorios`;
+    const items = params.recordatorios
+      .map(
+        (r, i) =>
+          `<tr style="background:${i % 2 ? "#202020" : "#1a1a1a"}"><td style="padding:12px;color:#fff">${escapeEmailHtml(r.mensaje)}</td><td style="padding:12px;color:#bbb;font-size:13px;text-align:right;white-space:nowrap">${fechaCorta(r.fecha)}</td></tr>`
+      )
+      .join("");
+    const response = await client.emails.send({
+      from: `Courier Box <${env.EMAIL_FROM}>`,
+      to: params.to,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto"><div style="background:#f57c00;padding:20px 24px;border-radius:12px 12px 0 0"><h1 style="color:#fff;margin:0;font-size:20px">Recordatorio${n === 1 ? "" : "s"} para gerencia</h1></div><div style="background:#141414;color:#e0e0e0;padding:24px;border-radius:0 0 12px 12px"><p style="margin:0 0 16px;color:#bbb">${escapeEmailHtml(params.de || "Tu asistente")} te dejó esto:</p><table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden">${items}</table><p style="text-align:center;margin:28px 0 4px"><a href="${url}" style="background:#f57c00;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Abrir recordatorios</a></p></div></div>`,
+    });
+    if (response.error) return { success: false, error: response.error.message };
+    return { success: true, providerId: response.data?.id };
+  } catch (err) {
+    return { success: false, error: emailError(err) };
+  }
+}

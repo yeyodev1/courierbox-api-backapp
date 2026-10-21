@@ -24,7 +24,11 @@ export interface IAbonoCuentaCobrar {
  * con sus abonos y la fecha en que hay que ir a cobrar (que dispara el correo
  * de recordatorio).
  */
+export type AmbitoCuentaCobrar = "gerencia" | "asistencia";
+
 export interface ICuentaCobrar extends Document {
+  /** De quién es la libreta: la de Oscar (gerencia) o la de su asistente. */
+  ambito: AmbitoCuentaCobrar;
   cliente: string;
   /** Clave de uno de los tipos configurados. */
   tipo: string;
@@ -56,6 +60,8 @@ const abonoSchema = new Schema<IAbonoCuentaCobrar>(
 
 const cuentaCobrarSchema = new Schema<ICuentaCobrar>(
   {
+    // Las cuentas viejas no traen el campo: se tratan como de gerencia.
+    ambito: { type: String, enum: ["gerencia", "asistencia"], default: "gerencia", index: true },
     cliente: { type: String, required: true, trim: true },
     tipo: { type: String, default: "courier", trim: true },
     monto: { type: Number, required: true, min: 0 },

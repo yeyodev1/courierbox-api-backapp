@@ -16,6 +16,10 @@
     {
       "path": "/api/v1/cuentas-cobrar/cron/recordatorios",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/v1/asistencia/cron/recordatorios",
+      "schedule": "0 13 * * *"
     }
   ]
 }
